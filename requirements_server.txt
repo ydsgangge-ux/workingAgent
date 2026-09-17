@@ -1,0 +1,61 @@
+# AGI-DPA 服务器依赖（不含 PyQt6 / GUI 相关）
+# 安装：pip install -r requirements_server.txt
+
+# ── Web 服务（18765 API）──
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# ── Web 聊天（18767 网页聊天室）──
+flask>=3.0.0
+flask-socketio>=5.3.0
+python-multipart>=0.0.6
+eventlet>=0.33.0
+
+# ── LLM / API 调用 ──
+openai>=1.0.0
+httpx>=0.25.0
+requests>=2.31.0
+
+# ── 语音合成（TTS）──
+edge-tts>=6.1.0
+
+# ── 语音识别（STT，可选）──
+# 讯飞用 WebSocket，无需额外包
+# 本地 Whisper 需要以下包（按需安装）：
+# openai-whisper>=20231117
+# torch>=2.0.0
+
+# ── 视觉 / 图片处理 ──
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# ── 人脸识别（可选，注册人脸后摄像头能认出谁是谁）──
+# 安装前需要系统编译依赖（CentOS）：
+#   sudo yum install -y gcc gcc-c++ cmake make python3-devel libstdc++-devel openblas-devel
+# Ubuntu:
+#   sudo apt install -y gcc g++ cmake make python3-dev libopenblas-dev
+# 装完系统库后：
+#   pip install insightface onnxruntime
+# 不装则仅支持 OpenCV 基础人脸检测（能识别画面里有几张脸，看不出是谁）
+
+# ── 数据库 ──
+# sqlite3 是 Python 标准库，无需安装
+
+# ── 语义向量检索（可选，强烈建议安装）──
+# 不装则降级为关键词匹配，检索准确性大幅下降
+# 需要 torch 支持：pip install torch --index-url https://download.pytorch.org/whl/cpu
+sentence-transformers>=3.0.0
+
+# ── 任务调度 ──
+APScheduler>=3.10.0
+
+# ── WebSocket（Wyoming / 小智协议 / 手机摄像头）──
+websockets>=12.0
+
+# ── SimLife 后端 ──
+# 已包含在 fastapi/uvicorn 中
+
+# ── 其他 ──
+

@@ -1,0 +1,222 @@
+{
+  "_schema_version": "1.0",
+  "_description": "世界观设定包模板 — 复制此文件并用 LLM 填充内容，或使用 generate_world_prompt.md 生成",
+
+  "world_id": "自定义英文id",
+  "world_name": "世界名称",
+  "world_type": "fantasy",
+  "world_type_options": ["modern", "fantasy", "scifi", "xianxia", "post_apocalyptic", "custom"],
+  "era": "时代背景描述，如「中世纪奇幻」「赛博朋克2077」「末世废土」",
+
+  "communication": {
+    "device": "与用户通讯的装置名称",
+    "device_description": "通讯装置的外观和使用方式",
+    "narrative_style": "通讯时的叙事风格，如「魔法通讯书的羊皮纸信件风格」「量子通讯器的全息投影风格」"
+  },
+  "time_system": {
+    "calendar": "日历体系，如「艾尔兰大陆历法」「公历」",
+    "time_unit": "日记中使用的时间单位，如「冒险日」「星历日」",
+    "special_dates": [
+      {
+        "name": "特殊日期名",
+        "date": "对应日期/周期",
+        "description": "描述"
+      }
+    ]
+  },
+
+  "geography": {
+    "overview": "整体地理描述（2-3段）",
+    "world_map_description": "世界地图的文字描述，帮助 LLM 理解空间关系",
+    "regions": [
+      {
+        "name": "区域名",
+        "description": "详细描述（地形、气候、特色）",
+        "climate": "气候特征",
+        "major_cities": ["主要城镇/城市"],
+        "landmarks": ["地标建筑/自然景观"],
+        "danger_level": 1,
+        "danger_level_description": "1=安全 2=低危 3=中危 4=高危 5=禁地",
+        "local_specialties": ["当地特产/资源"]
+      }
+    ]
+  },
+
+  "races": [
+    {
+      "name": "种族名",
+      "description": "外貌、生理特征描述",
+      "average_lifespan": "平均寿命",
+      "cultural_traits": ["文化特征", "社会习俗"],
+      "natural_abilities": ["天赋能力"],
+      "relations_with_others": {
+        "其他种族": "关系描述（友好/敌对/中立/复杂）"
+      },
+      "preferred_locations": ["主要聚居地"]
+    }
+  ],
+
+  "power_system": {
+    "name": "力量体系名称，如「元素魔法」「斗气」「忍术」「灵力」",
+    "description": "力量的本质和来源（2-3段）",
+    "principles": ["核心规则1", "核心规则2"],
+    "limitations": ["限制1，如「使用魔法需要消耗精神力」「元素之间有相克关系」"],
+    "levels": [
+      {
+        "rank": "等级编号或名称",
+        "name": "等级名，如「初级魔法师」「剑圣」",
+        "description": "该等级的能力范围",
+        "typical_age_to_reach": "通常达到此等级需要的年限"
+      }
+    ],
+    "specializations": [
+      {
+        "name": "专精方向，如「火系魔法」「治疗术」「幻术」",
+        "description": "该方向的特色",
+        "strengths": ["擅长场景"],
+        "weaknesses": ["弱点"]
+      }
+    ],
+    "legendary_abilities": [
+      {
+        "name": "传说级能力名",
+        "description": "描述",
+        "requirements": "获得条件"
+      }
+    ]
+  },
+
+  "factions": [
+    {
+      "name": "势力/组织名",
+      "type": "guild/kingdom/empire/academy/religion/mercenary/other",
+      "description": "势力描述（目标、理念、行事风格）",
+      "territory": "领地/势力范围",
+      "leader": "首领名及描述",
+      "member_count": "大致规模",
+      "internal_structure": "内部组织架构",
+      "relations": {
+        "其他势力": "外交关系描述"
+      },
+      "notable_members": [
+        {
+          "name": "成员名",
+          "role": "职位/身份",
+          "description": "简短描述"
+        }
+      ]
+    }
+  ],
+
+  "history": {
+    "creation_myth": "世界创世神话/传说",
+    "major_eras": [
+      {
+        "era_name": "时代名",
+        "time_period": "时间段",
+        "description": "时代概述",
+        "key_events": [
+          {
+            "event": "事件名",
+            "description": "事件描述",
+            "impact": "对世界的影响"
+          }
+        ]
+      }
+    ],
+    "current_situation": "当前世界的政治/社会/军事局势"
+  },
+
+  "daily_life": {
+    "currency": {
+      "name": "货币名称",
+      "denominations": ["面额列表"],
+      "exchange_hint": "购买力参考，如「一枚银币可以吃一顿便餐」"
+    },
+    "transportation": ["交通工具列表，如「马车」「飞行兽」「传送阵」"],
+    "communication_methods": ["日常通讯方式"],
+    "entertainment": ["娱乐活动"],
+    "food": {
+      "staples": ["主食"],
+      "specialties": ["特色美食"],
+      "drinks": ["饮品"]
+    },
+    "customs": ["重要习俗和禁忌"],
+    "technology_level": "科技/魔法技术发展水平描述"
+  },
+
+  "dangers": {
+    "monster_types": [
+      {
+        "name": "怪物种类名",
+        "description": "外观和能力描述",
+        "habitat": "栖息地",
+        "danger_level": 1,
+        "weakness": "弱点",
+        "loot": ["掉落物品"]
+      }
+    ],
+    "dungeons": [
+      {
+        "name": "副本/地下城名",
+        "location": "位置",
+        "description": "描述",
+        "floors_or_areas": "层数/区域数",
+        "difficulty": "难度等级",
+        "bosses": [
+          {
+            "name": "BOSS名",
+            "description": "描述",
+            "abilities": ["技能列表"],
+            "strategy_hint": "攻略提示"
+          }
+        ],
+        "rewards": ["通关奖励"],
+        "lore": "副本背景故事"
+      }
+    ],
+    "natural_hazards": ["自然灾害/环境危险，如「魔力风暴」「暗影迷雾」"],
+    "forbidden_zones": [
+      {
+        "name": "禁地名",
+        "description": "描述",
+        "reason": "被列为禁地的原因"
+      }
+    ]
+  },
+
+  "items": {
+    "equipment_tiers": ["装备品阶，如「普通→稀有→史诗→传说→神话」"],
+    "equipment_slots": ["装备部位，如「武器/护甲/头盔/戒指/项链」"],
+    "legendary_items": [
+      {
+        "name": "传说物品名",
+        "type": "武器/防具/饰品/消耗品/材料",
+        "description": "外观和故事描述",
+        "ability": "特殊能力",
+        "origin": "来源/铸造者",
+        "current_location": "当前所在"
+      }
+    ],
+    "consumables": [
+      {
+        "name": "消耗品名",
+        "type": "药水/食物/卷轴/材料",
+        "effect": "效果描述",
+        "rarity": "稀有度"
+      }
+    ],
+    "rare_resources": [
+      {
+        "name": "稀有资源名",
+        "description": "描述",
+        "where_to_find": "获取途径",
+        "uses": ["用途"]
+      }
+    ]
+  },
+
+  "character_generation_guide": "（可选）角色卡生成的额外引导提示词，会注入到角色卡生成的 prompt 中",
+  "activity_generation_guide": "（可选）日常活动描述的额外引导，会注入到活动生成的 prompt 中",
+  "event_generation_guide": "（可选）事件生成的额外引导，会注入到未来事件生成的 prompt 中"
+}

@@ -1,0 +1,275 @@
+{
+  "tasks": [
+    {
+      "id": "task_20260520_101944_d7bf",
+      "content": "测试提醒",
+      "trigger_time": "2026-05-20T10:20:44.739449",
+      "action": "speak",
+      "action_params": {
+        "message": "这是一条测试提醒！"
+      },
+      "repeat": null,
+      "status": "cancelled",
+      "created_at": "2026-05-20T10:19:44.739517",
+      "source": "system"
+    },
+    {
+      "id": "task_20260520_101944_f099",
+      "content": "工具测试提醒",
+      "trigger_time": "2026-05-20T12:19:44.740925",
+      "action": "speak",
+      "action_params": {
+        "message": "2小时到了！"
+      },
+      "repeat": null,
+      "status": "cancelled",
+      "created_at": "2026-05-20T10:19:44.740960",
+      "source": "system"
+    },
+    {
+      "id": "task_20260520_101944_8c95",
+      "content": "每日早安",
+      "trigger_time": "2026-05-21T10:19:44.741532",
+      "action": "speak",
+      "action_params": {
+        "message": "早安！新的一天开始了"
+      },
+      "repeat": "daily",
+      "status": "cancelled",
+      "created_at": "2026-05-20T10:19:44.741546",
+      "source": "system"
+    },
+    {
+      "id": "task_20260520_101944_230a",
+      "content": "定时开灯",
+      "trigger_time": "2026-05-20T10:49:44.742048",
+      "action": "tool",
+      "action_params": {
+        "tool_name": "ha_light_control",
+        "tool_params": {
+          "device": "客厅灯",
+          "action": "on"
+        }
+      },
+      "repeat": null,
+      "status": "cancelled",
+      "created_at": "2026-05-20T10:19:44.742070",
+      "source": "system"
+    },
+    {
+      "id": "task_20260520_103856_967b",
+      "content": "测试1",
+      "trigger_time": "2026-05-20T11:38:56.337724",
+      "action": "speak",
+      "action_params": {
+        "message": "1小时到了"
+      },
+      "repeat": null,
+      "status": "cancelled",
+      "created_at": "2026-05-20T10:38:56.337810",
+      "source": "system"
+    },
+    {
+      "id": "task_20260520_103925_bcb2",
+      "content": "测试1",
+      "trigger_time": "2026-05-20T11:39:25.210331",
+      "action": "speak",
+      "action_params": {
+        "message": "1小时到了"
+      },
+      "repeat": null,
+      "status": "cancelled",
+      "created_at": "2026-05-20T10:39:25.210393",
+      "source": "system"
+    },
+    {
+      "id": "test_overdue_30m",
+      "content": "30分钟前该提醒的",
+      "trigger_time": "2026-05-20T10:09:25.211815",
+      "action": "speak",
+      "action_params": {
+        "message": "（迟到的提醒）该喝水了"
+      },
+      "status": "done",
+      "created_at": "2026-05-20T10:09:25.211815",
+      "source": "system"
+    },
+    {
+      "id": "test_expired",
+      "content": "5小时前的任务",
+      "trigger_time": "2026-05-20T05:39:25.212951",
+      "action": "speak",
+      "action_params": {
+        "message": "已过期"
+      },
+      "status": "expired",
+      "created_at": "2026-05-20T05:39:25.212951",
+      "source": "system"
+    },
+    {
+      "id": "task_20260520_103925_8dd0",
+      "content": "每日喝水提醒",
+      "trigger_time": "2026-05-20T11:39:25.213657",
+      "action": "speak",
+      "action_params": {},
+      "repeat": null,
+      "status": "cancelled",
+      "created_at": "2026-05-20T10:39:25.213698",
+      "source": "system"
+    },
+    {
+      "id": "task_20260520_103925_75fe",
+      "content": "每日喝水提醒2",
+      "trigger_time": "2026-05-20T12:39:25.214388",
+      "action": "speak",
+      "action_params": {},
+      "repeat": null,
+      "status": "cancelled",
+      "created_at": "2026-05-20T10:39:25.214412",
+      "source": "system"
+    },
+    {
+      "id": "task_20260521_090420_076d",
+      "content": "提醒通在9:10去开会。",
+      "trigger_time": "2026-05-21T09:09:00",
+      "action": "speak",
+      "action_params": {
+        "message": "（迟到的提醒）通，现在是9点09分，再过1分钟就该去开会啦～别慌，慢慢来！"
+      },
+      "repeat": null,
+      "status": "done",
+      "created_at": "2026-05-21T09:04:20.113934",
+      "source": "system"
+    },
+    {
+      "id": "task_20260521_090422_330b",
+      "content": "提醒通在9点10分去开会",
+      "trigger_time": "2026-05-21T09:09:00",
+      "action": "speak",
+      "action_params": {
+        "message": "（迟到的提醒）通，现在是9点09分，再过1分钟就该去开会啦～别慌，慢慢来！"
+      },
+      "repeat": null,
+      "status": "done",
+      "created_at": "2026-05-21T09:04:22.069314",
+      "source": "system"
+    },
+    {
+      "id": "task_20260521_095211_8589",
+      "content": "提醒通之前提到的时间点",
+      "trigger_time": "2026-05-21T09:55:00",
+      "action": "speak",
+      "action_params": {
+        "message": "时间到啦～通，你9:50提的那个事儿现在9:55了，记得看看哦！😄"
+      },
+      "repeat": null,
+      "status": "done",
+      "created_at": "2026-05-21T09:52:11.542460",
+      "source": "system"
+    },
+    {
+      "id": "task_20260521_095213_1237",
+      "content": "提醒用户记得之前说的事儿",
+      "trigger_time": "2026-05-21T09:55:00",
+      "action": "speak",
+      "action_params": {
+        "message": "9:55到了哟～通，你之前说的那个事儿还记得嘛？"
+      },
+      "repeat": null,
+      "status": "done",
+      "created_at": "2026-05-21T09:52:13.283490",
+      "source": "system"
+    },
+    {
+      "id": "task_20260521_101745_be7d",
+      "content": "抢消费券提醒",
+      "trigger_time": "2026-05-21T10:20:00",
+      "action": "speak",
+      "action_params": {
+        "message": "通，10点20了，快去抢消费券！手慢无哦！"
+      },
+      "repeat": null,
+      "status": "done",
+      "created_at": "2026-05-21T10:17:45.921651",
+      "source": "system"
+    },
+    {
+      "id": "task_20260521_101747_2e5d",
+      "content": "抢消费券提醒",
+      "trigger_time": "2026-05-21T10:20:00",
+      "action": "speak",
+      "action_params": {
+        "message": "通，10点20了，快去抢消费券！手慢无哦！"
+      },
+      "repeat": null,
+      "status": "done",
+      "created_at": "2026-05-21T10:17:47.863751",
+      "source": "system"
+    },
+    {
+      "id": "task_20260521_110443_0526",
+      "content": "11:10提醒通去618抢购",
+      "trigger_time": "2026-05-21T11:10:00",
+      "action": "speak",
+      "action_params": {
+        "message": "通，11:10到了，该去618抢购啦！加油！"
+      },
+      "repeat": null,
+      "status": "done",
+      "created_at": "2026-05-21T11:04:43.710372",
+      "source": "system"
+    },
+    {
+      "id": "task_20260521_110447_1f15",
+      "content": "11:10提醒通去618抢购",
+      "trigger_time": "2026-05-21T11:10:00",
+      "action": "speak",
+      "action_params": {
+        "message": "通，11:10到了，该去618抢购啦！加油！"
+      },
+      "repeat": null,
+      "status": "done",
+      "created_at": "2026-05-21T11:04:47.470815",
+      "source": "system"
+    },
+    {
+      "id": "task_20260521_113635_5274",
+      "content": "提醒通在11:40去抢购",
+      "trigger_time": "2026-05-21T11:40:00",
+      "action": "speak",
+      "action_params": {
+        "message": "通，11:40到了，快去抢购！加油！"
+      },
+      "repeat": null,
+      "status": "done",
+      "created_at": "2026-05-21T11:36:35.616598",
+      "source": "system"
+    },
+    {
+      "id": "task_20260521_113637_0acb",
+      "content": "提醒用户抢购",
+      "trigger_time": "2026-05-21T11:40:00",
+      "action": "speak",
+      "action_params": {
+        "message": "通，11:40到了，快去抢购！加油！"
+      },
+      "repeat": null,
+      "status": "done",
+      "created_at": "2026-05-21T11:36:37.860974",
+      "source": "system"
+    },
+    {
+      "id": "task_20260521_130420_1f8b",
+      "content": "提醒用户抢购/手速任务",
+      "trigger_time": "2026-05-21T13:10:00",
+      "action": "speak",
+      "action_params": {
+        "message": "通，1点10分到了！这次手速一定要快，冲鸭！🦆💨"
+      },
+      "repeat": null,
+      "status": "done",
+      "created_at": "2026-05-21T13:04:20.456762",
+      "source": "system"
+    }
+  ]
+}

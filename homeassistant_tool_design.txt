@@ -1,0 +1,385 @@
+================================================================
+Yount-AI × HomeAssistant 接入完整方案
+================================================================
+
+一、核心思路
+----------------------------------------------------------------
+HomeAssistant 接入对 Levy 来说只是 B 层新增一个工具插件。
+A 层说"把客厅灯调暗"，B 层调 HomeAssistant REST API，灯就暗了。
+整个接入只需要三件事：
+  1. HomeAssistant 生成一个 Long-Lived Access Token
+  2. B 层新增 homeassistant_tool.py
+  3. 把这个工具注册到现有工具表里
+
+不需要改任何现有逻辑。
+
+
+二、文件结构
+----------------------------------------------------------------
+tools/
+└── homeassistant_tool.py     新增，HomeAssistant 工具插件
+
+config/
+└── ha_config.json            新增，存 HA 地址和 Token
+
+
+三、HomeAssistant 准备工作
+----------------------------------------------------------------
+步骤1：生成 Long-Lived Access Token
+  打开 HomeAssistant 网页界面
+  → 右下角点击头像
+  → 安全（Security）
+  → 长期访问令牌（Long-Lived Access Tokens）
+  → 创建令牌，复制保存
+
+步骤2：确认 HA 地址
+  局域网地址格式：http://192.168.x.x:8123
+  如果装在本机：http://localhost:8123
+
+步骤3：确认设备实体 ID
+  打开 HA 界面
+  → 开发者工具（Developer Tools）
+  → 状态（States）
+  → 找到你的设备，复制 entity_id
+  示例：
+    light.living_room        客厅灯
+    switch.air_conditioner   空调
+    cover.curtain_bedroom    卧室窗帘
+    climate.ac_living        客厅空调（带温控）
+
+
+四、ha_config.json
+----------------------------------------------------------------
+{
+  "base_url": "http://192.168.1.100:8123",
+  "token": "你的 Long-Lived Access Token",
+  "devices": {
+    "客厅灯": "light.living_room",
+    "卧室灯": "light.bedroom",
+    "空调": "climate.ac_living",
+    "客厅窗帘": "cover.curtain_living",
+    "卧室窗帘": "cover.curtain_bedroom",
+    "咖啡机": "switch.coffee_machine"
+  }
+}
+
+说明：
+  devices 是设备的中文名称到 entity_id 的映射
+  A 层说"客厅灯"，工具自动转换为 light.living_room
+  新增设备只需要在这里加一行，不需要改代码
+
+
+五、homeassistant_tool.py 完整实现
+----------------------------------------------------------------
+
+import json
+import requests
+from pathlib import Path
+
+CONFIG_PATH = Path(__file__).parent.parent / "config" / "ha_config.json"
+
+
+class HomeAssistantTool:
+    """
+    B 层工具：控制 HomeAssistant 智能家居设备
+    Levy 通过这个工具控制家里所有接入 HA 的设备
+    """
+
+    def __init__(self):
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        self.base_url = config["base_url"].rstrip("/")
+        self.token = config["token"]
+        self.devices = config.get("devices", {})
+        self.headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json"
+        }
+
+    # ── 基础 API 调用 ─────────────────────────────────────
+
+    def _call_service(self, domain: str, service: str, entity_id: str,
+                      extra: dict = None) -> bool:
+        """调用 HA 服务（开关/控制设备的底层方法）"""
+        url = f"{self.base_url}/api/services/{domain}/{service}"
+        data = {"entity_id": entity_id}
+        if extra:
+            data.update(extra)
+        try:
+            resp = requests.post(url, headers=self.headers,
+                                 json=data, timeout=5)
+            return resp.status_code in (200, 201)
+        except Exception as e:
+            print(f"[HA] 调用失败：{e}")
+            return False
+
+    def _get_state(self, entity_id: str) -> dict:
+        """读取设备当前状态"""
+        url = f"{self.base_url}/api/states/{entity_id}"
+        try:
+            resp = requests.get(url, headers=self.headers, timeout=5)
+            return resp.json() if resp.status_code == 200 else {}
+        except Exception as e:
+            print(f"[HA] 读取状态失败：{e}")
+            return {}
+
+    def _resolve_entity(self, name_or_id: str) -> str:
+        """中文名称 → entity_id（如果已经是 entity_id 直接返回）"""
+        return self.devices.get(name_or_id, name_or_id)
+
+    # ── 灯光控制 ──────────────────────────────────────────
+
+    def light_on(self, device: str) -> str:
+        """开灯"""
+        entity_id = self._resolve_entity(device)
+        ok = self._call_service("light", "turn_on", entity_id)
+        return f"{'已开' if ok else '开灯失败'}: {device}"
+
+    def light_off(self, device: str) -> str:
+        """关灯"""
+        entity_id = self._resolve_entity(device)
+        ok = self._call_service("light", "turn_off", entity_id)
+        return f"{'已关' if ok else '关灯失败'}: {device}"
+
+    def light_brightness(self, device: str, brightness: int) -> str:
+        """调节亮度（0-100，会自动转换为 HA 的 0-255）"""
+        entity_id = self._resolve_entity(device)
+        ha_brightness = int(brightness / 100 * 255)
+        ok = self._call_service("light", "turn_on", entity_id,
+                                {"brightness": ha_brightness})
+        return f"{'亮度已调至' if ok else '调节失败'} {brightness}%: {device}"
+
+    def light_color_temp(self, device: str, mode: str) -> str:
+        """
+        调节色温
+        mode: warm（暖光）/ cool（冷光）/ neutral（中性）
+        """
+        entity_id = self._resolve_entity(device)
+        temp_map = {"warm": 500, "neutral": 300, "cool": 153}
+        color_temp = temp_map.get(mode, 300)
+        ok = self._call_service("light", "turn_on", entity_id,
+                                {"color_temp": color_temp})
+        mode_cn = {"warm": "暖光", "neutral": "中性", "cool": "冷光"}.get(mode, mode)
+        return f"{'色温已调为' if ok else '调节失败'} {mode_cn}: {device}"
+
+    # ── 开关控制（插座、咖啡机、风扇等）────────────────────
+
+    def switch_on(self, device: str) -> str:
+        entity_id = self._resolve_entity(device)
+        ok = self._call_service("switch", "turn_on", entity_id)
+        return f"{'已开启' if ok else '开启失败'}: {device}"
+
+    def switch_off(self, device: str) -> str:
+        entity_id = self._resolve_entity(device)
+        ok = self._call_service("switch", "turn_off", entity_id)
+        return f"{'已关闭' if ok else '关闭失败'}: {device}"
+
+    # ── 窗帘控制 ──────────────────────────────────────────
+
+    def cover_open(self, device: str) -> str:
+        entity_id = self._resolve_entity(device)
+        ok = self._call_service("cover", "open_cover", entity_id)
+        return f"{'窗帘已打开' if ok else '操作失败'}: {device}"
+
+    def cover_close(self, device: str) -> str:
+        entity_id = self._resolve_entity(device)
+        ok = self._call_service("cover", "close_cover", entity_id)
+        return f"{'窗帘已关闭' if ok else '操作失败'}: {device}"
+
+    def cover_position(self, device: str, position: int) -> str:
+        """设置窗帘开合度（0=全关，100=全开）"""
+        entity_id = self._resolve_entity(device)
+        ok = self._call_service("cover", "set_cover_position", entity_id,
+                                {"position": position})
+        return f"{'窗帘已调至' if ok else '操作失败'} {position}%: {device}"
+
+    # ── 空调控制 ──────────────────────────────────────────
+
+    def ac_on(self, device: str, temperature: float = 26.0,
+              mode: str = "cool") -> str:
+        """
+        开空调
+        mode: cool（制冷）/ heat（制热）/ auto（自动）/ fan_only（仅送风）
+        """
+        entity_id = self._resolve_entity(device)
+        ok = self._call_service("climate", "set_hvac_mode", entity_id,
+                                {"hvac_mode": mode})
+        if ok:
+            self._call_service("climate", "set_temperature", entity_id,
+                               {"temperature": temperature})
+        mode_cn = {"cool": "制冷", "heat": "制热",
+                   "auto": "自动", "fan_only": "送风"}.get(mode, mode)
+        return f"{'空调已开，' + mode_cn + '，' + str(temperature) + '°C' if ok else '开启失败'}: {device}"
+
+    def ac_off(self, device: str) -> str:
+        entity_id = self._resolve_entity(device)
+        ok = self._call_service("climate", "set_hvac_mode", entity_id,
+                                {"hvac_mode": "off"})
+        return f"{'空调已关' if ok else '关闭失败'}: {device}"
+
+    def ac_temperature(self, device: str, temperature: float) -> str:
+        entity_id = self._resolve_entity(device)
+        ok = self._call_service("climate", "set_temperature", entity_id,
+                                {"temperature": temperature})
+        return f"{'温度已设为' if ok else '设置失败'} {temperature}°C: {device}"
+
+    # ── 状态查询 ──────────────────────────────────────────
+
+    def get_device_state(self, device: str) -> str:
+        """查询设备当前状态，返回 A 层可直接读取的文字"""
+        entity_id = self._resolve_entity(device)
+        state = self._get_state(entity_id)
+        if not state:
+            return f"无法获取 {device} 的状态"
+        current = state.get("state", "unknown")
+        attrs = state.get("attributes", {})
+        result = f"{device} 当前状态：{current}"
+        if "brightness" in attrs:
+            brightness_pct = round(attrs["brightness"] / 255 * 100)
+            result += f"，亮度 {brightness_pct}%"
+        if "temperature" in attrs:
+            result += f"，温度 {attrs['temperature']}°C"
+        if "current_position" in attrs:
+            result += f"，开合度 {attrs['current_position']}%"
+        return result
+
+    def get_all_states(self) -> str:
+        """查询所有已配置设备的状态，供 A 层做环境感知"""
+        results = []
+        for name in self.devices:
+            results.append(self.get_device_state(name))
+        return "\n".join(results)
+
+    # ── 场景模式（组合操作）────────────────────────────────
+
+    def scene_sleep(self) -> str:
+        """睡眠模式：关所有灯，拉上窗帘，空调调低"""
+        results = []
+        for name, entity_id in self.devices.items():
+            if entity_id.startswith("light."):
+                results.append(self.light_off(name))
+            elif entity_id.startswith("cover."):
+                results.append(self.cover_close(name))
+        return "睡眠模式已启动：\n" + "\n".join(results)
+
+    def scene_morning(self) -> str:
+        """早晨模式：开窗帘，暖光，适宜温度"""
+        results = []
+        for name, entity_id in self.devices.items():
+            if entity_id.startswith("cover."):
+                results.append(self.cover_open(name))
+            elif entity_id.startswith("light."):
+                results.append(self.light_on(name))
+                results.append(self.light_color_temp(name, "warm"))
+        return "早晨模式已启动：\n" + "\n".join(results)
+
+    def scene_focus(self) -> str:
+        """专注模式：冷光，适中亮度，关窗帘减少干扰"""
+        results = []
+        for name, entity_id in self.devices.items():
+            if entity_id.startswith("light."):
+                results.append(self.light_on(name))
+                results.append(self.light_color_temp(name, "cool"))
+                results.append(self.light_brightness(name, 80))
+        return "专注模式已启动：\n" + "\n".join(results)
+
+
+六、注册到 B 层工具表
+----------------------------------------------------------------
+在现有工具注册文件里加一行：
+
+  from tools.homeassistant_tool import HomeAssistantTool
+  ha_tool = HomeAssistantTool()
+
+  # 注册到工具表
+  tools = {
+      "file_tool": ...,          # 现有
+      "terminal_tool": ...,      # 现有
+      "web_tool": ...,           # 现有
+      "homeassistant_tool": ha_tool,   # 新增
+  }
+
+
+七、A 层调用示例（Levy 主动控制的典型场景）
+----------------------------------------------------------------
+
+场景1：用户久坐提醒
+  视觉感知：用户在电脑前超过2小时
+  A 层判断：需要休息提示
+  B 层执行：
+    ha_tool.light_color_temp("客厅灯", "warm")
+    ha_tool.light_brightness("客厅灯", 60)
+    ha_tool.cover_position("客厅窗帘", 50)
+  Levy 说：
+    "你已经坐了两个多小时了，我把光线调柔和了一些。"
+
+场景2：感知到用户要睡觉
+  语音识别到"我要睡了"或视觉感知用户走向卧室
+  B 层执行：
+    ha_tool.scene_sleep()
+  Levy 说：
+    "晚安，已经帮你把灯都关了，窗帘也拉上了。"
+
+场景3：早晨问候
+  时间触发（如早上7点）或感知到用户起床
+  B 层执行：
+    ha_tool.scene_morning()
+  Levy 说：
+    "早上好，窗帘已经打开了，今天天气不错。"
+
+场景4：用户直接语音指令
+  用户说："帮我把客厅灯调暗一点"
+  A 层解析意图 → 亮度降低20%
+  B 层执行：
+    ha_tool.light_brightness("客厅灯", 40)
+  Levy 说：
+    "好的，客厅灯已经调暗了。"
+
+
+八、依赖安装
+----------------------------------------------------------------
+pip install requests
+
+不需要其他依赖，HomeAssistant REST API 是标准 HTTP，
+requests 库就够了。
+
+
+九、测试步骤
+----------------------------------------------------------------
+步骤1：验证 HA 连接
+  在终端运行：
+    from tools.homeassistant_tool import HomeAssistantTool
+    ha = HomeAssistantTool()
+    print(ha.get_all_states())
+  成功标准：打印出所有配置设备的当前状态
+
+步骤2：测试单个设备控制
+    print(ha.light_on("客厅灯"))
+    print(ha.light_brightness("客厅灯", 50))
+    print(ha.light_off("客厅灯"))
+  成功标准：灯实际亮起、变暗、熄灭
+
+步骤3：测试 A 层联动
+  对话输入："把客厅灯关掉"
+  验证 Levy 能否自动调用 ha_tool.light_off("客厅灯")
+
+
+十、智能音箱对比说明
+----------------------------------------------------------------
+你问小智和 HA 哪个更简单：
+
+  小智（语音输入设备）
+    方向：外部声音 → 进入 Levy
+    复杂度：音频流 + WebSocket 协议 + 编解码
+    类比：给 Levy 装耳朵
+
+  HomeAssistant（执行设备）
+    方向：Levy → 控制家居设备
+    复杂度：HTTP 请求，几行代码
+    类比：给 Levy 装手
+
+  两者方向完全相反，HA 接入比小智简单 10 倍。
+  而且 HA 接入后，Levy 才真正开始"影响物理世界"，
+  这才是乔伊感觉的核心——不只是聊天，而是真的在帮你。
+
+================================================================

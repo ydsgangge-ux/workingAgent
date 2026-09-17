@@ -1,0 +1,448 @@
+"""
+图片生成模块
+============
+双后端：
+  1. 智谱 Cogview-3-Flash（高质量，需 API Key，与 GLM 共用）
+  2. pollinations.ai（免费备选，无需 API Key）
+"""
+
+import os
+import uuid
+import time
+import random
+import json
+import urllib.request
+import urllib.parse
+import urllib.error
+from pathlib import Path
+from datetime import datetime
+from typing import Optional, Tuple
+
+# 旧域名稳定可用，新域名(gen)可能被地域限制 401，做回退
+_BASES = [
+    "https://image.pollinations.ai/prompt",
+    "https://gen.pollinations.ai/image",
+]
+DEFAULT_WIDTH = 1024
+DEFAULT_HEIGHT = 1024
+TIMEOUT = 120
+
+
+def get_image_dir() -> Path:
+    # 优先使用项目根目录下的 images 文件夹（确保有写入权限）
+    _proj = Path(__file__).parent.parent
+    d = _proj / "images"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        # 测试写入权限
+        _test = d / ".write_test"
+        _test.write_text("ok")
+        _test.unlink()
+        return d
+    except Exception:
+        pass
+    # 回退到用户目录
+    if sys.platform == "win32":
+        root = Path(os.environ.get("APPDATA", str(Path.home()))) / "workingAgent"
+    else:
+        root = Path.home() / ".workingagent"
+    d = root / "images"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# ── 场景池（随机选取，避免重复）──
+_SELFIE_SCENES = [
+    "in a cozy cafe, holding a coffee cup, warm lighting",
+    "standing by a window, looking outside, natural light",
+    "sitting at a desk with books, soft lamp light",
+    "walking in a park, autumn leaves falling",
+    "in a library, reading a book, quiet atmosphere",
+    "on a rooftop at dusk, city skyline background",
+    "in a flower garden, spring morning",
+    "at a beach, ocean waves, sunset",
+    "in a rain-soaked street, neon reflections",
+    "cooking in a kitchen, warm home feeling",
+    "in an art studio, painting, creative atmosphere",
+    "riding a bicycle on a tree-lined path",
+    "in a music room, playing piano, afternoon sun",
+    "at a train station, waiting, cinematic lighting",
+    "in a snow-covered street, winter evening",
+]
+
+_LANDSCAPE_SCENES = [
+    "a serene mountain lake at dawn, mist over water, reflection",
+    "a winding path through a lavender field, purple horizon",
+    "a quiet bamboo forest, dappled sunlight filtering through",
+    "a coastal cliff at golden hour, waves crashing below",
+    "a starry night sky over rolling hills, milky way visible",
+    "cherry blossom trees along a river bank, petals falling",
+    "a cozy cabin in snowy mountains, smoke from chimney",
+    "an old stone bridge over a crystal clear stream",
+    "a sunflower field stretching to the horizon, blue sky",
+    "a misty ancient temple hidden in mountains",
+    "autumn forest with red and gold leaves, a small waterfall",
+    "a tranquil Japanese garden with koi pond and maple trees",
+    "a vast desert with sand dunes under a dramatic sunset",
+    "a lighthouse on a rocky shore, stormy sky, dramatic waves",
+    "a field of fireflies in a dark forest, magical glow",
+]
+
+
+# ── 拍照动作/姿势（自拍时随机选取）──
+_SELFIE_POSES = [
+    "looking at camera with a gentle smile",
+    "glancing sideways, candid moment",
+    "tilting head slightly, playful expression",
+    "looking down, shy pose",
+    "holding phone for mirror selfie",
+    "waving at camera cheerfully",
+    "covering mouth while laughing",
+    "resting chin on hand, thoughtful look",
+    "stretching arms, relaxed pose",
+    "fixing hair, natural moment",
+    "holding a prop near face, peeking from behind",
+    "looking over shoulder, back view partially",
+    "eyes closed, enjoying the breeze",
+    "making a peace sign, casual vibe",
+    "sipping from a cup, candid lifestyle shot",
+    "leaning against a wall, cool posture",
+    "reading a book, focused expression",
+    "putting on sunglasses, stylish look",
+    "hugging a pillow or plushie, cozy mood",
+    "blowing a kiss to the camera",
+    " adjusting collar, looking away",
+    "walking towards camera, dynamic shot",
+    "sitting cross-legged, relaxed on the floor",
+    "brushing hair aside, soft gaze",
+    "looking up at the sky, dreamy expression",
+]
+
+# ── 景别描述（自拍 + 风景共用）──
+_SHOT_TYPES = [
+    "close-up portrait shot",
+    "medium shot, upper body visible",
+    "full body shot",
+    "extreme close-up on face, detailed features",
+    "wide angle shot showing full scene",
+    "over-the-shoulder shot",
+    "low angle shot looking up slightly",
+    "high angle shot from above",
+    "side profile view",
+    "three-quarter view",
+    "centered composition",
+    "off-center composition, rule of thirds",
+]
+
+# ── 艺术风格（增加多样性）──
+_ART_STYLES = [
+    "anime art style",
+    "soft watercolor illustration style",
+    "digital painting style, semi-realistic",
+    "studio ghibli inspired art style",
+    "manga art style, clean lines",
+    "pastel toned illustration",
+    "warm toned digital art",
+]
+
+
+def build_image_prompt(personality: dict, image_type: str = None, simlife_context: str = None) -> str:
+    """
+    根据人格设定生成图片 prompt。
+    image_type: "selfie" 或 "scenery"，None 时随机选
+    simlife_context: SimLife 当前状态文本（可选），会优先用当前场景作为拍照背景
+    每次生成包含随机拍照动作、景别、艺术风格，避免千篇一律。
+    """
+    avatar = personality.get("avatar_prompt", "").strip()
+    name = personality.get("name", "")
+
+    # 没有设置人物描述时的默认形象
+    if not avatar:
+        avatar = "a young woman with gentle eyes, soft smile, casual outfit"
+
+    rng = random.Random(time.time_ns())
+
+    if image_type is None:
+        image_type = "selfie" if rng.random() < 0.6 else "scenery"
+
+    # 根据时段微调光线
+    hour = datetime.now().hour
+    if 6 <= hour < 10:
+        light = "soft morning light"
+    elif 10 <= hour < 14:
+        light = "bright daylight"
+    elif 14 <= hour < 17:
+        light = "warm afternoon light"
+    elif 17 <= hour < 20:
+        light = "golden hour lighting"
+    else:
+        light = "twilight ambiance"
+
+    # 随机艺术风格
+    art_style = rng.choice(_ART_STYLES)
+
+    # ── SimLife 场景感知：用当前场景替换随机场景 ──
+    simlife_scene_prompt = None
+    if simlife_context:
+        # 从 SimLife 上下文中提取场景关键词
+        _SIMLIFE_SCENE_MAP = {
+            "在家工作": "working at home desk, cozy room with warm lighting, laptop and books",
+            "在家办公": "working at home desk, cozy room with warm lighting, laptop and books",
+            "咖啡馆办公": "in a cozy cafe, working on laptop, coffee on table",
+            "户外工作": "outdoors with camera equipment, urban street or park setting",
+            "外出工作": "outdoors with camera equipment, urban street or park setting",
+            "工作室": "in a creative studio, equipment and monitors around",
+            "工作中": "at office desk, professional setting",
+            "开会": "in a meeting room, presenting to colleagues",
+            "午休觅食": "at a restaurant or food court, lunch time",
+            "加班": "working late at desk, office empty, dim lighting",
+            "睡觉": "sleeping peacefully in bed, soft moonlight",
+            "晨间准备": "in bathroom mirror, morning routine, getting ready",
+            "晚间放松": "on sofa at home, relaxing in the evening",
+            "周末赖床": "in bed, lazy weekend morning, sunlight through curtains",
+            "去公司": "walking on street, commuting to work, morning city",
+            "回家": "walking on street, evening commute, sunset city",
+            "咖啡馆": "sitting in a cozy cafe, warm lighting",
+            "公园": "in a beautiful park, trees and flowers around",
+            "超市": "pushing a shopping cart in a supermarket",
+            "街头闲逛": "walking on a vibrant city street, exploring",
+            "和朋友在外": "hanging out with friends, casual outdoor setting",
+        }
+        for keyword, scene_desc in _SIMLIFE_SCENE_MAP.items():
+            if keyword in simlife_context:
+                simlife_scene_prompt = scene_desc
+                break
+
+    # ── 动态穿着（从 SimLife wardrobe 读取）──
+    dynamic_outfit_en = None
+    if simlife_context:
+        _SIMLIFE_SCENE_KEYS = {
+            "在家工作": "HOME_WORKING", "在家办公": "HOME_WORKING",
+            "咖啡馆办公": "CAFE_WORKING", "户外工作": "OUTDOOR_WORKING",
+            "外出工作": "OUTDOOR_WORKING", "工作室": "STUDIO_WORKING",
+            "工作中": "OFFICE_WORKING", "开会": "OFFICE_MEETING",
+            "午休觅食": "OFFICE_LUNCH", "加班": "OVERTIME",
+            "睡觉": "HOME_SLEEPING", "晨间准备": "HOME_MORNING",
+            "晚间放松": "HOME_EVENING", "周末赖床": "HOME_WEEKEND_LAZY",
+            "去公司": "COMMUTE_TO_WORK", "回家": "COMMUTE_TO_HOME",
+            "咖啡馆": "CAFE", "公园": "PARK", "超市": "SUPERMARKET",
+            "街头闲逛": "STREET_WANDERING", "和朋友在外": "FRIEND_HANGOUT",
+        }
+        for keyword, scene_key in _SIMLIFE_SCENE_KEYS.items():
+            if keyword in simlife_context:
+                try:
+                    from engine.simlife_client import SimLifeClient
+                    _sl = SimLifeClient()
+                    ch = _sl._read_character()
+                    if ch:
+                        dynamic_outfit_en = _sl.get_outfit_en_from_wardrobe(ch, scene_key)
+                except Exception:
+                    pass
+                break
+
+    if image_type == "selfie":
+        # 优先用 SimLife 当前场景，否则随机
+        scene = simlife_scene_prompt or rng.choice(_SELFIE_SCENES)
+        pose = rng.choice(_SELFIE_POSES)
+        shot = rng.choice(_SHOT_TYPES)
+        # avatar 后追加动态穿着
+        outfit_suffix = f", wearing {dynamic_outfit_en}" if dynamic_outfit_en else ""
+        prompt = f"({avatar}{outfit_suffix}), {pose}, {scene}, {shot}, {light}, high quality, detailed, {art_style}"
+    else:
+        scene = simlife_scene_prompt or rng.choice(_LANDSCAPE_SCENES)
+        # 风景图的景别更偏向远景
+        landscape_shots = [
+            "wide panoramic shot",
+            "vast wide angle view",
+            "aerial bird's eye view",
+            "dramatic wide angle composition",
+            "expansive landscape view",
+        ]
+        shot = rng.choice(landscape_shots)
+        prompt = f"{scene}, {shot}, {light}, beautiful landscape, high quality, detailed, {art_style}"
+
+    return prompt, image_type
+
+
+def generate_image_url(prompt: str, width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT) -> str:
+    encoded = urllib.parse.quote(prompt)
+    return f"{_BASES[0]}/{encoded}?width={width}&height={height}&nologo=true&nofeed=true"
+
+
+def download_image(url: str, save_path: str = None) -> Optional[str]:
+    if save_path is None:
+        save_path = str(
+            get_image_dir()
+            / f"gen_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.jpg"
+        )
+
+    encoded = urllib.parse.quote(url.split("/")[-1].split("?")[0])
+    query = url.split("?", 1)[1] if "?" in url else ""
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "image/*",
+    }
+
+    for base in _BASES:
+        try:
+            full_url = f"{base}/{encoded}?{query}" if query else f"{base}/{encoded}"
+            req = urllib.request.Request(full_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                ct = resp.headers.get("Content-Type", "")
+                if "image" not in ct:
+                    continue
+                data = resp.read()
+                if len(data) < 1000:
+                    continue
+                with open(save_path, "wb") as f:
+                    f.write(data)
+                print(f"[图片生成] 已保存: {save_path} ({len(data)//1024}KB)")
+                return save_path
+        except Exception as e:
+            print(f"[图片生成] 域名 {base} 失败: {e}")
+            continue
+
+    print("[图片生成] 所有域名均失败")
+    return None
+
+
+def generate_and_download(personality: dict, simlife_context: str = None) -> Optional[Tuple[str, str, str]]:
+    """
+    一站式：根据人格生成图片。
+    优先使用 Cogview-3-Flash，失败则回退 pollinations.ai。
+    返回 (prompt, image_path, image_type) 或 None
+    """
+    prompt, image_type = build_image_prompt(personality, simlife_context=simlife_context)
+    print(f"[图片生成] {image_type}: {prompt[:80]}...")
+
+    # 优先 Cogview
+    cogview_result = _generate_cogview(prompt)
+    if cogview_result:
+        return (prompt, cogview_result, image_type)
+
+    # 回退 pollinations
+    print("[图片生成] Cogview 不可用，回退 pollinations.ai")
+    url = generate_image_url(prompt)
+    image_path = download_image(url)
+    if image_path:
+        return (prompt, image_path, image_type)
+    return None
+
+
+def generate_image_with_prompt(prompt: str, size: str = "1024x1024") -> Optional[str]:
+    """
+    用指定 prompt 生成图片（供工具/聊天调用）。
+    优先 Cogview，失败回退 pollinations。
+    返回图片本地路径或 None。
+    """
+    # Cogview
+    cogview_result = _generate_cogview(prompt, size=size)
+    if cogview_result:
+        return cogview_result
+
+    # pollinations
+    w, h = size.split("x")
+    url = generate_image_url(prompt, width=int(w), height=int(h))
+    return download_image(url)
+
+
+# ── 智谱 Cogview-3-Flash ─────────────────────────────────────
+
+_COGVIEW_URL = "https://open.bigmodel.cn/api/paas/v4/images/generations"
+
+
+def _get_zhipu_api_key() -> str:
+    """获取智谱 API Key（与 GLM 共用）"""
+    # 1. 环境变量
+    key = os.environ.get("ZHIPU_API_KEY", "")
+    if key:
+        return key
+    # 2. 从配置文件读取
+    try:
+        from desktop.config import load_config
+        cfg = load_config()
+        provider = cfg.get("api_provider", "")
+        key = cfg.get("api_key", "")
+        if provider == "zhipu" and key:
+            return key
+        # 如果主 LLM 不是智谱，检查 vision_api_key
+        vkey = cfg.get("vision_api_key", "")
+        vprovider = cfg.get("vision_provider", "")
+        if vprovider == "zhipu" and vkey:
+            return vkey
+        # 任意 provider 的 key 也能试（智谱兼容 OpenAI 格式）
+        if key:
+            return key
+    except Exception:
+        pass
+    return ""
+
+
+def _generate_cogview(prompt: str, size: str = "1024x1024") -> Optional[str]:
+    """
+    调用智谱 Cogview-3-Flash 生成图片。
+    返回本地图片路径或 None。
+    """
+    api_key = _get_zhipu_api_key()
+    if not api_key:
+        return None
+
+    try:
+        payload = json.dumps({
+            "model": "cogview-3-flash",
+            "prompt": prompt,
+            "size": size,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            _COGVIEW_URL,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+
+        data_list = result.get("data", [])
+        if not data_list:
+            print("[图片生成] Cogview 返回空数据")
+            return None
+
+        image_url = data_list[0].get("url", "")
+        if not image_url:
+            return None
+
+        # 下载图片到本地
+        save_path = str(
+            get_image_dir()
+            / f"cogview_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.png"
+        )
+
+        dl_req = urllib.request.Request(image_url, headers={
+            "User-Agent": "Mozilla/5.0",
+        })
+        with urllib.request.urlopen(dl_req, timeout=60) as dl_resp:
+            img_data = dl_resp.read()
+            if len(img_data) < 1000:
+                return None
+            with open(save_path, "wb") as f:
+                f.write(img_data)
+
+        print(f"[图片生成] Cogview 已保存: {save_path} ({len(img_data)//1024}KB)")
+        return save_path
+
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")[:200]
+        except Exception:
+            pass
+        print(f"[图片生成] Cogview HTTP {e.code}: {body}")
+        return None
+    except Exception as e:
+        print(f"[图片生成] Cogview 异常: {e}")
+        return None

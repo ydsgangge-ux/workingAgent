@@ -1,0 +1,489 @@
+[
+  {
+    "id": "parcel_surprise",
+    "label": "收到朋友寄来的快递",
+    "trigger_condition": "",
+    "probability_per_day": 0.03,
+    "mood_delta": 15,
+    "consequences": [],
+    "applicable_hours": [10, 21],
+    "log_templates": [
+      "收到一个快递，是朋友寄来的，拆开看是一条围巾",
+      "快递到了，是上次逛淘宝时加购物车的那本书"
+    ]
+  },
+  {
+    "id": "design_approved",
+    "label": "设计稿被一次性过了",
+    "trigger_condition": "weekday",
+    "probability_per_day": 0.04,
+    "mood_delta": 25,
+    "consequences": ["early_leave", "possible_park"],
+    "applicable_hours": [14, 18],
+    "log_templates": [
+      "设计稿过稿了，而且是第一次就过了",
+      "甲方说挺好的不用改了，整个人都轻松了"
+    ]
+  },
+  {
+    "id": "stray_cat_encounter",
+    "label": "遇到一只流浪猫",
+    "trigger_condition": "",
+    "probability_per_day": 0.05,
+    "mood_delta": 10,
+    "consequences": [],
+    "applicable_hours": [7, 22],
+    "log_templates": [
+      "在路边遇到一只橘猫，蹲下来撸了一会儿",
+      "楼下多了一只流浪猫，买了根火腿肠喂它"
+    ]
+  },
+  {
+    "id": "concert_ticket",
+    "label": "抢到了演出票",
+    "trigger_condition": "",
+    "probability_per_day": 0.01,
+    "mood_delta": 30,
+    "consequences": [],
+    "applicable_hours": [10, 22],
+    "log_templates": [
+      "抢到了一直想看的演出票，激动了好一会儿",
+      "刷手机看到喜欢的乐队要来巡演，果断买了票"
+    ]
+  },
+  {
+    "id": "subway_delay",
+    "label": "地铁故障迟到",
+    "trigger_condition": "weekday AND commute_to_work",
+    "probability_per_day": 0.06,
+    "mood_delta": -15,
+    "consequences": ["delay_arrive_work", "possible_cafe_evening"],
+    "applicable_hours": [7, 9],
+    "log_templates": [
+      "地铁在中间站停了十几分钟，全车人都不知道发生了什么",
+      "换乘的时候人太多，挤了三趟才上去",
+      "地铁广播说设备故障，等了快二十分钟"
+    ]
+  },
+  {
+    "id": "extra_task",
+    "label": "被临时加了新需求",
+    "trigger_condition": "weekday",
+    "probability_per_day": 0.08,
+    "mood_delta": -20,
+    "consequences": ["overtime"],
+    "applicable_hours": [9, 17],
+    "log_templates": [
+      "快下班的时候老板又发来新需求，叹了口气打开电脑",
+      "需求又变了，之前做的全要推翻重来",
+      "客户说想换个方向，已经改了三版了"
+    ]
+  },
+  {
+    "id": "friend_conflict",
+    "label": "和朋友有点小别扭",
+    "trigger_condition": "",
+    "probability_per_day": 0.03,
+    "mood_delta": -15,
+    "consequences": [],
+    "applicable_hours": [10, 23],
+    "log_templates": [
+      "和朋友因为一件小事有点不愉快，翻来覆去想了好久",
+      "朋友说话有点冲，不知道是自己太敏感还是对方心情不好"
+    ]
+  },
+  {
+    "id": "pet_sick",
+    "label": "猫生病了",
+    "trigger_condition": "",
+    "probability_per_day": 0.02,
+    "mood_delta": -25,
+    "consequences": ["pet_hospital"],
+    "applicable_hours": [17, 21],
+    "log_templates": [
+      "发现猫不太吃东西，下班直接去了宠物医院",
+      "猫吐了两次，赶紧查了一下附近的宠物医院"
+    ]
+  },
+  {
+    "id": "finished_book",
+    "label": "看完了攒了很久的一本书",
+    "trigger_condition": "",
+    "probability_per_day": 0.04,
+    "mood_delta": 8,
+    "consequences": [],
+    "applicable_hours": [20, 23],
+    "log_templates": [
+      "终于把那本看了两个月的书看完了，结局出乎意料",
+      "睡前翻完最后一章，合上书发了会儿呆"
+    ]
+  },
+  {
+    "id": "film_crew_spotted",
+    "label": "街上看到有人在拍电影",
+    "trigger_condition": "",
+    "probability_per_day": 0.03,
+    "mood_delta": 5,
+    "consequences": [],
+    "applicable_hours": [10, 20],
+    "log_templates": [
+      "下班路上看到有剧组在拍东西，围观了一会儿",
+      "路口封了一半，说是在拍广告"
+    ]
+  },
+  {
+    "id": "craving_childhood",
+    "label": "突然很想吃小时候的东西",
+    "trigger_condition": "",
+    "probability_per_day": 0.04,
+    "mood_delta": 0,
+    "consequences": [],
+    "applicable_hours": [11, 21],
+    "log_templates": [
+      "突然特别想吃小时候学校门口卖的那种烤肠",
+      "翻到一张小时候的照片，突然想吃外婆做的红烧肉"
+    ]
+  },
+  {
+    "id": "rain_no_umbrella",
+    "label": "出门没带伞被雨淋了",
+    "trigger_condition": "",
+    "probability_per_day": 0.03,
+    "mood_delta": -10,
+    "consequences": [],
+    "applicable_hours": [7, 20],
+    "log_templates": [
+      "出门的时候还没下雨，到了公司才发现外面瓢泼大雨",
+      "在便利店买了把伞，但已经湿了大半个肩膀"
+    ]
+  },
+  {
+    "id": "good_lunch",
+    "label": "发现了一家好吃的店",
+    "trigger_condition": "weekday",
+    "probability_per_day": 0.05,
+    "mood_delta": 8,
+    "consequences": [],
+    "applicable_hours": [11, 13],
+    "log_templates": [
+      "同事推荐了一家面馆，意外地好吃",
+      "在巷子里发现了一家小餐馆，藏得真深"
+    ]
+  },
+  {
+    "id": "social_media_viral",
+    "label": "发的内容被很多人点赞",
+    "trigger_condition": "",
+    "probability_per_day": 0.02,
+    "mood_delta": 12,
+    "consequences": [],
+    "applicable_hours": [20, 23],
+    "log_templates": [
+      "随手发的一条动态意外火了，一直在刷评论",
+      "上次拍的照片被好多人点赞，有点开心"
+    ]
+  },
+  {
+    "id": "early_morning",
+    "label": "今天醒得特别早",
+    "trigger_condition": "",
+    "probability_per_day": 0.04,
+    "mood_delta": -3,
+    "consequences": [],
+    "applicable_hours": [5, 7],
+    "log_templates": [
+      "不知道为什么五点多就醒了，翻了个身又睡了过去",
+      "被楼上的装修声吵醒了，比闹钟还早半小时"
+    ]
+  },
+  {
+    "id": "package_lost",
+    "label": "快递显示签收但没收到",
+    "trigger_condition": "",
+    "probability_per_day": 0.03,
+    "mood_delta": -12,
+    "consequences": [],
+    "applicable_hours": [10, 21],
+    "log_templates": [
+      "快递显示已签收，但根本没收到，找客服沟通了半天",
+      "翻遍了门口没找到快递，最后发现被放到了邻居家"
+    ]
+  },
+  {
+    "id": "nice_weather_walk",
+    "label": "天气特别好出去走了走",
+    "trigger_condition": "",
+    "probability_per_day": 0.04,
+    "mood_delta": 10,
+    "consequences": [],
+    "applicable_hours": [7, 18],
+    "log_templates": [
+      "今天天气特别好，午饭后在公司楼下转了一圈",
+      "阳光很好，在阳台站了一会儿，感觉心情好了一些"
+    ]
+  },
+  {
+    "id": "freelance_no_inspiration",
+    "label": "完全没灵感，对着屏幕发呆",
+    "trigger_condition": "",
+    "probability_per_day": 0.06,
+    "mood_delta": -10,
+    "consequences": [],
+    "applicable_hours": [10, 18],
+    "applicable_styles": ["freelance"],
+    "log_templates": [
+      "坐在电脑前两个小时，一个字都没写出来",
+      "翻了好多参考图还是没感觉，干脆出去走走"
+    ]
+  },
+  {
+    "id": "freelance_client_deadline",
+    "label": "客户催稿了",
+    "trigger_condition": "",
+    "probability_per_day": 0.05,
+    "mood_delta": -15,
+    "consequences": [],
+    "applicable_hours": [9, 18],
+    "applicable_styles": ["freelance"],
+    "log_templates": [
+      "客户又来催了，说后天一定要交",
+      "看了眼日历，突然发现截止日期就在明天"
+    ]
+  },
+  {
+    "id": "freelance_good_feedback",
+    "label": "作品收到了很好的反馈",
+    "trigger_condition": "",
+    "probability_per_day": 0.04,
+    "mood_delta": 20,
+    "consequences": [],
+    "applicable_hours": [14, 22],
+    "applicable_styles": ["freelance"],
+    "log_templates": [
+      "发了新作品，评论里好多人在夸",
+      "一个粉丝私信说被自己的作品打动了，开心了一整天"
+    ]
+  },
+  {
+    "id": "freelance_new_project",
+    "label": "接到一个新项目",
+    "trigger_condition": "",
+    "probability_per_day": 0.04,
+    "mood_delta": 15,
+    "consequences": [],
+    "applicable_hours": [9, 17],
+    "applicable_styles": ["freelance"],
+    "log_templates": [
+      "一个老客户介绍了新项目过来，这次预算还不错",
+      "有人在社交平台私信想合作，聊了聊挺有意思的"
+    ]
+  },
+  {
+    "id": "freelance_payment_received",
+    "label": "收到了一笔尾款",
+    "trigger_condition": "",
+    "probability_per_day": 0.03,
+    "mood_delta": 18,
+    "consequences": [],
+    "applicable_hours": [9, 17],
+    "applicable_styles": ["freelance"],
+    "log_templates": [
+      "收到了上个月的尾款，这个月不用吃土了",
+      "看了眼银行卡余额，松了口气"
+    ]
+  },
+  {
+    "id": "freelance_lonely_day",
+    "label": "一个人在家工作太安静了",
+    "trigger_condition": "",
+    "probability_per_day": 0.04,
+    "mood_delta": -8,
+    "consequences": [],
+    "applicable_hours": [14, 18],
+    "applicable_styles": ["freelance"],
+    "log_templates": [
+      "一整天没跟任何人说话，有点不习惯",
+      "在家待了三天了，决定明天去咖啡馆换换环境"
+    ]
+  },
+  {
+    "id": "goal_progress",
+    "label": "人生目标有了小进展",
+    "trigger_condition": "",
+    "probability_per_day": 0.05,
+    "mood_delta": 12,
+    "consequences": [],
+    "applicable_hours": [9, 22],
+    "log_templates": [
+      "坚持了好多天终于有了点进步",
+      "突然发现自己的某项技能比上个月好了一些",
+      "完成了一个小里程碑，给自己买了杯奶茶庆祝"
+    ]
+  },
+  {
+    "id": "goal_setback",
+    "label": "计划被打乱了",
+    "trigger_condition": "",
+    "probability_per_day": 0.03,
+    "mood_delta": -8,
+    "consequences": [],
+    "applicable_hours": [10, 22],
+    "log_templates": [
+      "原计划今天要去练的，结果有事耽搁了",
+      "坚持了好久的习惯断了一天，有点沮丧"
+    ]
+  },
+  {
+    "id": "goal_new_idea",
+    "label": "突然想学个新东西",
+    "trigger_condition": "",
+    "probability_per_day": 0.03,
+    "mood_delta": 5,
+    "consequences": [],
+    "applicable_hours": [19, 23],
+    "log_templates": [
+      "刷到一个很酷的教程，想学但怕自己坚持不下来",
+      "看到别人的作品突然燃起了学画画的冲动"
+    ]
+  },
+  {
+    "id": "travel_flight_delay",
+    "label": "航班延误了两个小时",
+    "trigger_condition": "",
+    "probability_per_day": 0.06,
+    "mood_delta": -12,
+    "consequences": [],
+    "applicable_hours": [6, 22],
+    "applicable_styles": ["travel"],
+    "log_templates": [
+      "航班延误了，在机场百无聊赖地刷手机",
+      "登机口前坐了快两个小时，腿都麻了"
+    ]
+  },
+  {
+    "id": "travel_great_footage",
+    "label": "拍到了超棒的素材",
+    "trigger_condition": "",
+    "probability_per_day": 0.06,
+    "mood_delta": 20,
+    "consequences": [],
+    "applicable_hours": [8, 18],
+    "applicable_styles": ["travel"],
+    "log_templates": [
+      "今天光线特别好，拍到的素材回放了好几遍",
+      "偶遇了一场当地节日，镜头里的画面太美了"
+    ]
+  },
+  {
+    "id": "travel_lost_way",
+    "label": "在一个陌生的地方迷路了",
+    "trigger_condition": "",
+    "probability_per_day": 0.05,
+    "mood_delta": -8,
+    "consequences": [],
+    "applicable_hours": [9, 19],
+    "applicable_styles": ["travel"],
+    "log_templates": [
+      "跟着导航走结果导航也不靠谱，绕了半小时才找到路",
+      "小巷子里七拐八拐完全分不清方向，最后问了个当地人才找回来"
+    ]
+  },
+  {
+    "id": "travel_local_friend",
+    "label": "在旅途中认识了新朋友",
+    "trigger_condition": "",
+    "probability_per_day": 0.04,
+    "mood_delta": 15,
+    "consequences": [],
+    "applicable_hours": [11, 21],
+    "applicable_styles": ["travel"],
+    "log_templates": [
+      "在一个咖啡馆和隔壁桌的人聊了起来，加了联系方式",
+      "同住一家青旅的旅友邀请一起逛夜市"
+    ]
+  },
+  {
+    "id": "travel_brand_collab",
+    "label": "收到了一个品牌合作邀请",
+    "trigger_condition": "",
+    "probability_per_day": 0.03,
+    "mood_delta": 25,
+    "consequences": [],
+    "applicable_hours": [10, 20],
+    "applicable_styles": ["travel"],
+    "log_templates": [
+      "一个酒店品牌私信想合作推广，看了下条件还不错",
+      "旅游局邀请做一期推广，正好赶上现在的行程"
+    ]
+  },
+  {
+    "id": "travel_rain",
+    "label": "旅途中遇到大雨",
+    "trigger_condition": "",
+    "probability_per_day": 0.05,
+    "mood_delta": -10,
+    "consequences": [],
+    "applicable_hours": [8, 19],
+    "applicable_styles": ["travel"],
+    "log_templates": [
+      "刚到景点就下起了大雨，只能在屋檐下等",
+      "没带伞，淋了一身跑到最近的一家便利店"
+    ]
+  },
+  {
+    "id": "travel_viral_post",
+    "label": "发的旅行视频火了",
+    "trigger_condition": "",
+    "probability_per_day": 0.02,
+    "mood_delta": 30,
+    "consequences": [],
+    "applicable_hours": [20, 23],
+    "applicable_styles": ["travel"],
+    "log_templates": [
+      "昨天发的旅行vlog播放量直接翻了五倍，评论区炸了",
+      "一条随手拍的日落视频被好多人转发"
+    ]
+  },
+  {
+    "id": "travel_home_sick",
+    "label": "突然有点想家",
+    "trigger_condition": "",
+    "probability_per_day": 0.04,
+    "mood_delta": -8,
+    "consequences": [],
+    "applicable_hours": [19, 23],
+    "applicable_styles": ["travel"],
+    "log_templates": [
+      "吃到一家味道很像家里的餐厅，突然想家了",
+      "看到别人家的窗户亮着灯，想起了家里的猫"
+    ]
+  },
+  {
+    "id": "travel_hidden_gem",
+    "label": "发现了一个冷门宝藏地点",
+    "trigger_condition": "",
+    "probability_per_day": 0.04,
+    "mood_delta": 18,
+    "consequences": [],
+    "applicable_hours": [9, 18],
+    "applicable_styles": ["travel"],
+    "log_templates": [
+      "跟着当地人的推荐找到了一家隐藏的小店，好吃到哭",
+      "偏离了常规路线，发现了一个几乎没有游客的绝美角度"
+    ]
+  },
+  {
+    "id": "travel_equipment_issue",
+    "label": "拍摄设备出了问题",
+    "trigger_condition": "",
+    "probability_per_day": 0.03,
+    "mood_delta": -15,
+    "consequences": [],
+    "applicable_hours": [8, 19],
+    "applicable_styles": ["travel"],
+    "log_templates": [
+      "相机存储卡突然满了，只好删了一些旧素材腾空间",
+      "充电宝没电了，手机只剩12%的电，赶紧找地方充电"
+    ]
+  }
+]

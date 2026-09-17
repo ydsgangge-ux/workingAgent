@@ -1,0 +1,308 @@
+"""
+应用配置和常量
+"""
+import os
+import sys
+import json
+from pathlib import Path
+
+# ── 路径 ──────────────────────────────────────────
+APP_NAME    = "workingAgent"
+APP_VERSION = "1.0.0"
+
+# 数据目录（跨平台）
+if sys.platform == "win32":
+    DATA_ROOT = Path(os.environ.get("APPDATA", str(Path.home()))) / "workingAgent"
+else:
+    DATA_ROOT = Path.home() / ".workingagent"
+
+DATA_ROOT.mkdir(parents=True, exist_ok=True)
+
+CONFIG_FILE      = DATA_ROOT / "config.json"
+PERSONALITY_FILE = DATA_ROOT / "personality.json"
+DB_FILE          = str(DATA_ROOT / "memory.db")
+LOG_FILE         = DATA_ROOT / "workingagent.log"
+
+# ── 默认配置 ──────────────────────────────────────
+DEFAULT_CONFIG = {
+    "api_key":           "",
+    "api_provider":      "deepseek",        # "deepseek" | "ollama"
+    "ollama_url":        "http://localhost:11434",
+    "ollama_model":      "qwen2.5:7b",
+    "hotkey_activate":   "ctrl+shift+space",
+    "hotkey_screenshot": "ctrl+shift+s",
+    "autostart":         False,
+    "tray_minimize":     True,
+    "float_opacity":     0.95,
+    "theme":             "dark",
+    "window_geometry":   None,
+    "ocr_language":      "chi_sim+eng",
+    "verbose":           True,
+    "newsapi_key":       "",     # NewsAPI.org API Key（可选，用于新闻工具）
+    # ── 多模态模型配置（Vision）──
+    "vision_provider":   "",     # 空则自动继承主 LLM，可设 "openai"/"claude"/"gemini"/"qwen"/"zhipu"/"ollama"
+    "vision_model":      "",     # 空则用 provider 默认 vision 模型
+    "vision_api_key":    "",     # 空则继承主 API Key
+    "vision_base_url":   "",     # 自定义 API 地址（一般不用填）
+    # ── VRM 虚拟形象模块 ──
+    "vrm_enabled":       True,   # 是否启用 VRM 虚拟形象面板
+    "vrm_width":         220,    # VRM 面板宽度 (px)
+    "vrm_height":        220,    # VRM 面板高度 (px)
+    # ── 语音识别（STT）──
+    "stt_provider":      "deepseek",  # "deepseek" | "xunfei" | "whisper_local"
+    "stt_language":      "zh",        # 识别语言
+    "xunfei_app_id":     "",          # 讯飞开放平台 APPID
+    "xunfei_api_key":    "",          # 讯飞 API Key
+    "xunfei_api_secret": "",          # 讯飞 API Secret
+    "whisper_model":     "base",      # 本地 Whisper 模型：tiny/base/small/medium/large
+    # ── 运行模式 ──
+    "mode":              "screen",  # "screen"（屏幕模式，SimLife运行） | "hardware"（硬件模式，真实传感器+视觉）
+    # ── 传感器模块（Sensor Agent）──
+    "sensor_enabled":    False,  # 是否启用传感器模块
+    "sensor_mock":       True,   # 模拟模式（无硬件时使用模拟数据）
+    "sensor_type":       "robot_dog",  # "robot_dog" | "robot_arm" | "custom"
+    "sensor_mqtt_host":  "localhost",
+    "sensor_mqtt_port":  1883,
+    "sensor_push_interval": 30,  # 推送间隔（秒）
+    # ── 思考模式（Thinking Mode）──
+    "thinking_mode":      "auto",  # "auto" / "always_on" / "always_off"
+    "thinking_effort":    "high", # 思考深度：low/medium/high/max
+    "thinking_budget":    8000,   # 思考 token 预算（Claude/Gemini/通义/智谱）
+    # ── 企业微信机器人 ──
+    "wecom_bot_id":       "",
+    "wecom_bot_secret":   "",
+}
+
+
+def load_config() -> dict:
+    if CONFIG_FILE.exists():
+        try:
+            saved = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            cfg = DEFAULT_CONFIG.copy()
+            cfg.update(saved)
+            return cfg
+        except Exception:
+            pass
+    return DEFAULT_CONFIG.copy()
+
+
+def save_config(cfg: dict):
+    CONFIG_FILE.write_text(
+        json.dumps(cfg, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+
+# ── 样式表 ────────────────────────────────────────
+DARK_QSS = """
+QMainWindow, QDialog, QWidget {
+    background-color: #0d1117;
+    color: #e6edf3;
+    font-family: 'Segoe UI', 'Microsoft YaHei', system-ui;
+    font-size: 13px;
+}
+QSplitter::handle { background: #21262d; width: 1px; }
+
+/* 输入框 */
+QLineEdit, QTextEdit, QPlainTextEdit {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 7px 10px;
+    color: #e6edf3;
+    selection-background-color: #1f6feb;
+}
+QLineEdit:focus, QTextEdit:focus { border-color: #58a6ff; }
+
+/* 按钮 */
+QPushButton {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 7px 16px;
+    color: #e6edf3;
+    font-weight: 600;
+}
+QPushButton:hover  { background: #30363d; border-color: #58a6ff; }
+QPushButton:pressed { background: #161b22; }
+QPushButton#btn_primary {
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+        stop:0 #1f6feb, stop:1 #7c3aed);
+    border: none; color: white;
+}
+QPushButton#btn_primary:hover { opacity: 0.9; }
+QPushButton#btn_danger {
+    background: #da3633; border: none; color: white;
+}
+
+/* 列表 / 树 */
+QListWidget, QTreeWidget {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    outline: none;
+}
+QListWidget::item { padding: 6px 10px; border-radius: 4px; }
+QListWidget::item:selected { background: #1f6feb; }
+QListWidget::item:hover    { background: #21262d; }
+
+/* 滚动条 */
+QScrollBar:vertical {
+    width: 6px; background: transparent;
+}
+QScrollBar::handle:vertical {
+    background: #30363d; border-radius: 3px; min-height: 20px;
+}
+QScrollBar::handle:vertical:hover { background: #58a6ff; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+
+/* 标签页 */
+QTabWidget::pane { border: 1px solid #30363d; border-radius: 6px; }
+QTabBar::tab {
+    background: #161b22; border: 1px solid #30363d;
+    padding: 7px 16px; margin-right: 2px; border-radius: 4px 4px 0 0;
+}
+QTabBar::tab:selected { background: #21262d; border-bottom-color: #21262d; color: #58a6ff; }
+QTabBar::tab:hover    { background: #21262d; }
+
+/* 滑块 */
+QSlider::groove:horizontal { height: 4px; background: #30363d; border-radius: 2px; }
+QSlider::handle:horizontal {
+    width: 14px; height: 14px; margin: -5px 0;
+    background: #58a6ff; border-radius: 7px;
+}
+
+/* 复选框 */
+QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #30363d; border-radius: 3px; }
+QCheckBox::indicator:checked { background: #1f6feb; border-color: #1f6feb; }
+
+/* 分组框 */
+QGroupBox {
+    border: 1px solid #30363d; border-radius: 8px;
+    margin-top: 10px; padding-top: 8px;
+    font-weight: 600;
+}
+QGroupBox::title { subcontrol-origin: margin; left: 10px; color: #58a6ff; }
+
+/* 状态栏 */
+QStatusBar { background: #161b22; border-top: 1px solid #30363d; color: #8b949e; }
+
+/* 工具提示 */
+QToolTip { background: #21262d; border: 1px solid #58a6ff; color: #e6edf3; padding: 4px 8px; }
+
+/* 菜单 */
+QMenu { background: #161b22; border: 1px solid #30363d; border-radius: 6px; }
+QMenu::item { padding: 6px 20px; }
+QMenu::item:selected { background: #1f6feb; }
+QMenu::separator { background: #30363d; height: 1px; margin: 4px 0; }
+"""
+
+
+# ── 浅色（白色主题）── 与 DARK_QSS 的 selector 逐一对应 ──
+LIGHT_QSS = """
+QMainWindow, QDialog, QWidget {
+    background-color: #f5f6f8;
+    color: #1f2328;
+    font-family: 'Segoe UI', 'Microsoft YaHei', system-ui;
+    font-size: 13px;
+}
+QSplitter::handle { background: #d0d7de; width: 1px; }
+
+/* 输入框 */
+QLineEdit, QTextEdit, QPlainTextEdit {
+    background: #ffffff;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    padding: 7px 10px;
+    color: #1f2328;
+    selection-background-color: #1f6feb;
+}
+QLineEdit:focus, QTextEdit:focus { border-color: #0969da; }
+
+/* 按钮 */
+QPushButton {
+    background: #eaeef2;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    padding: 7px 16px;
+    color: #1f2328;
+    font-weight: 600;
+}
+QPushButton:hover  { background: #dfe4e9; border-color: #0969da; }
+QPushButton:pressed { background: #ffffff; }
+QPushButton#btn_primary {
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+        stop:0 #1f6feb, stop:1 #7c3aed);
+    border: none; color: white;
+}
+QPushButton#btn_primary:hover { opacity: 0.9; }
+QPushButton#btn_danger {
+    background: #cf222e; border: none; color: white;
+}
+
+/* 列表 / 树 */
+QListWidget, QTreeWidget {
+    background: #ffffff;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    outline: none;
+}
+QListWidget::item { padding: 6px 10px; border-radius: 4px; }
+QListWidget::item:selected { background: #1f6feb; color: white; }
+QListWidget::item:hover    { background: #eaeef2; }
+
+/* 滚动条 */
+QScrollBar:vertical {
+    width: 6px; background: transparent;
+}
+QScrollBar::handle:vertical {
+    background: #c8cdd3; border-radius: 3px; min-height: 20px;
+}
+QScrollBar::handle:vertical:hover { background: #0969da; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+
+/* 标签页 */
+QTabWidget::pane { border: 1px solid #d0d7de; border-radius: 6px; }
+QTabBar::tab {
+    background: #ffffff; border: 1px solid #d0d7de;
+    padding: 7px 16px; margin-right: 2px; border-radius: 4px 4px 0 0;
+}
+QTabBar::tab:selected { background: #eaeef2; border-bottom-color: #eaeef2; color: #0969da; }
+QTabBar::tab:hover    { background: #eaeef2; }
+
+/* 滑块 */
+QSlider::groove:horizontal { height: 4px; background: #d0d7de; border-radius: 2px; }
+QSlider::handle:horizontal {
+    width: 14px; height: 14px; margin: -5px 0;
+    background: #0969da; border-radius: 7px;
+}
+
+/* 复选框 */
+QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #d0d7de; border-radius: 3px; }
+QCheckBox::indicator:checked { background: #1f6feb; border-color: #1f6feb; }
+
+/* 分组框 */
+QGroupBox {
+    border: 1px solid #d0d7de; border-radius: 8px;
+    margin-top: 10px; padding-top: 8px;
+    font-weight: 600;
+}
+QGroupBox::title { subcontrol-origin: margin; left: 10px; color: #0969da; }
+
+/* 状态栏 */
+QStatusBar { background: #ffffff; border-top: 1px solid #d0d7de; color: #57606a; }
+
+/* 工具提示 */
+QToolTip { background: #eaeef2; border: 1px solid #0969da; color: #1f2328; padding: 4px 8px; }
+
+/* 菜单 */
+QMenu { background: #ffffff; border: 1px solid #d0d7de; border-radius: 6px; }
+QMenu::item { padding: 6px 20px; }
+QMenu::item:selected { background: #1f6feb; color: white; }
+QMenu::separator { background: #d0d7de; height: 1px; margin: 4px 0; }
+"""
+
+
+def get_qss(theme: str = "dark") -> str:
+    """按主题返回对应样式表：'dark' 深色 | 'light' 浅色（默认深色）"""
+    return LIGHT_QSS if theme == "light" else DARK_QSS

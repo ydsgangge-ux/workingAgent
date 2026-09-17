@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<!-- 登录页 -->
+<div id="loginPage" class="login-page">
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="login-logo">AI</span>
+    </div>
+    <h2 class="login-title">欢迎回来</h2>
+    <p class="login-sub">使用桌面端密码短语登录，记忆与人格完全互通</p>
+    <div class="login-field">
+      <label>密码短语</label>
+      <input id="loginPass" type="password" placeholder="输入密码短语…" autocomplete="current-password">
+    </div>
+    <button id="loginBtn" class="login-btn" onclick="doLogin()">登录</button>
+    <div id="loginErr" class="login-err"></div>
+  </div>
+</div>
+
+<!-- 主界面 -->
+<div id="appPage" class="app" style="display:none">
+
+  <!-- 左侧边栏 -->
+  <aside id="sidebar" class="sidebar">
+    <!-- Logo -->
+    <div class="sidebar-top">
+      <span class="logo-text">AI</span>
+      <button class="btn-sidebar-icon" title="新对话" onclick="newChat()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+    </div>
+
+    <!-- New chat -->
+    <button class="btn-new-chat" onclick="newChat()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      New chat
+    </button>
+
+    <!-- Search -->
+    <div class="search-box">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" placeholder="Search" id="searchInput">
+    </div>
+
+    <!-- Sections -->
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Chats
+      </a>
+      <a href="#" class="nav-item" onclick="showTimedTasks();return false;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        定时任务
+      </a>
+    </nav>
+
+    <!-- Starred / Recent -->
+    <div class="chat-list-container">
+      <div class="chat-section-header">
+        <span>Starred</span>
+      </div>
+      <div id="chatListStarred" class="chat-list"></div>
+      <div class="chat-section-header">
+        <span>Recent</span>
+      </div>
+      <div id="chatListRecent" class="chat-list"></div>
+    </div>
+
+    <!-- 底部用户区 -->
+    <div class="sidebar-bottom">
+      <div class="user-area">
+        <div class="user-avatar">Y</div>
+        <div class="user-info">
+          <span class="user-name" id="userName">YDS</span>
+          <span class="user-plan">Free plan</span>
+        </div>
+        <button class="btn-icon-sm" title="退出" onclick="doLogout()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 右侧主区域 -->
+  <main class="main-area">
+
+    <!-- 顶栏 -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="btn-toggle" onclick="toggleSidebar()" title="切换侧边栏">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <div class="chat-title-dropdown">
+          <span id="chatTitle">AI</span>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="toolbox-wrapper">
+          <button class="btn-share" onclick="toggleToolbox()" id="toolboxBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            工具箱
+          </button>
+          <div class="toolbox-dropdown" id="toolboxDropdown" style="display:none">
+            <div class="toolbox-search">
+              <input type="text" placeholder="搜索工具…" id="toolSearchInput" oninput="filterTools(this.value)">
+            </div>
+            <div id="toolboxList" class="toolbox-list"></div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 消息区 -->
+    <div id="chatMessages" class="messages-area">
+      <div class="welcome-screen" id="welcomeScreen">
+        <h2>AI</h2>
+        <p>How can I help you today?</p>
+      </div>
+    </div>
+
+    <!-- 输入区 -->
+    <div class="input-area">
+      <div class="input-wrapper">
+        <button class="btn-attach" title="附件">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <textarea id="chatInput" placeholder="Write a message..." rows="1"
+          oninput="autoResize(this)" onkeydown="handleKey(event)"></textarea>
+        <div class="input-right">
+          <select class="model-select">
+            <option>Sonnet 4.6 Low</option>
+          </select>
+          <button class="btn-input-icon" title="语音">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </button>
+          <button id="sendBtn" class="btn-send" onclick="sendMessage()" title="发送">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </div>
+      <p class="disclaimer">AI can make mistakes. Please double-check responses.</p>
+    </div>
+  </main>
+</div>
+
+<!-- 定时任务面板 -->
+<div id="timedPanel" class="modal-overlay" style="display:none" onclick="closeTimedTasks(event)">
+  <div class="modal-panel" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3>定时任务</h3>
+      <button class="btn-close" onclick="hideTimedTasks()">&times;</button>
+    </div>
+    <div class="modal-body" id="timedBody"></div>
+  </div>
+</div>
+
+<!-- 图片查看器 -->
+<div id="imageViewer" class="image-viewer" style="display:none" onclick="closeImageViewer()">
+  <img id="imageViewerImg" src="">
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+// ── 浏览器GPS定位 ──
+(function(){
+  if(!navigator.geolocation)return;
+  function upd(){
+    navigator.geolocation.getCurrentPosition(
+      function(p){
+        fetch('/api/update_location',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({lat:p.coords.latitude,lng:p.coords.longitude,accuracy:p.coords.accuracy})
+        }).catch(function(){});
+      },
+      function(e){console.log('GPS定位失败',e.message);},
+      {enableHighAccuracy:true,timeout:10000,maximumAge:300000}
+    );
+  }
+  upd();
+  setInterval(upd,300000);
+})();
+</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "base_url": "http://localhost:8123",
+  "token": "你的 Home Assistant Long-Lived Access Token",
+  "rtsp_url": "rtsp://admin:password@192.168.1.10:554/h264/ch1/main/av_stream",
+  "audio_source": "phone",
+  "mic_device_index": null,
+  "wyoming_host": "0.0.0.0",
+  "wyoming_port": 10600,
+  "phone_url": "http://192.168.100.103:8080",
+  "amap_key": "你的高德 Web 服务 API Key（可在 console.amap.com 申请）",
+  "wecom_bot_id": "企业微信智能机器人 BotID",
+  "wecom_bot_secret": "企业微信智能机器人 Secret（长连接专用）",
+  "wake_words": [
+    "焕灵"
+  ],
+  "devices": {
+    "客厅灯": "light.living_room",
+    "卧室灯": "light.bedroom",
+    "空调": "climate.ac_living",
+    "客厅窗帘": "cover.curtain_living",
+    "卧室窗帘": "cover.curtain_bedroom",
+    "咖啡机": "switch.coffee_machine",
+    "摄像头": "camera.192_168_137_21"
+  }
+}

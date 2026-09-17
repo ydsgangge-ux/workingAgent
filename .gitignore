@@ -1,0 +1,87 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project-specific (user data stored in user dir, not here)
+*.db
+*.log
+
+# Work tools
+.workbuddy/
+.codebuddy/
+
+# AI context files (not for public repo)
+PROJECT_HANDOFF.md
+main_patch.txt
+
+# VRM model files (large binary, user provides separately)
+vrm_module/static/*.vrm
+
+# Packaging
+*.tar.gz
+*.zip
+
+# Screenshots / temp assets
+screenshot_*.png
+
+# Demo recordings (screen recordings, may contain private content)
+*.mp4
+
+# Everything CLI (external binary, users download separately)
+engine/es.exe
+
+# SimLife runtime data (personal, generated on first setup)
+simlife/data/world_state.json
+simlife/data/character_card.json
+simlife/data/npc_cards.json
+simlife/data/event_history.json
+simlife/data/scheduled_events.json
+simlife/data/weather_cache.json
+simlife/data/last_online.json
+
+# ── 敏感数据（含凭证，切勿提交）────────────────
+ha_config.json
+*.db-shm
+*.db-wal
+work.db
+memory.db
+
+# ── 运行时数据 ─────────────────────────────────
+web_chats/
+images/uploads/
+images/cogview_*.png
+images/gen_*.jpg
+data/visual_images/
+mock_images/
+
+# ── 本地调试/临时文件 ─────────────────────────
+_cookies.txt
+_login_data.json
+_login_data2.json
+_test_output.txt
+_tmp_out.txt
