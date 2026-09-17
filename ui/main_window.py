@@ -2185,13 +2185,16 @@ class SettingsPage(QWidget):
             AutoStart.disable()
 
     def _on_theme_changed(self):
-        """切换主题：立即保存并全局应用（无需重启）"""
+        """切换主题：保存 + 全局即时应用（无需重启）"""
+        from desktop.theme import apply_theme
         self._cfg["theme"] = self._theme_combo.currentData() or "dark"
         save_config(self._cfg)
+        qss = apply_theme(self._cfg["theme"])
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(qss)
+        self.window().setStyleSheet(qss)
         self.settings_changed.emit(self._cfg)
-        # 对话框自身也即时刷新
-        top = self.window()
-        top.setStyleSheet(get_qss(self._cfg["theme"]))
         self._save_msg.setText("✅ 主题已切换")
         QTimer.singleShot(2500, lambda: self._save_msg.setText(""))
 
@@ -6300,12 +6303,14 @@ class MainWindow(QMainWindow):
         threading.Thread(target=_run, daemon=True).start()
 
     def _on_settings_changed(self, cfg: dict):
-        # 主题切换：全局即时应用（QSS 无缓存，直接 setStyleSheet 即生效）
+        # 主题切换：全局重映射 + 即时应用（QSS 无缓存，直接 setStyleSheet 即生效）
+        from desktop.theme import apply_theme
         theme = cfg.get("theme", "dark")
-        self.setStyleSheet(get_qss(theme))
+        qss = apply_theme(theme)
+        self.setStyleSheet(qss)
         app = QApplication.instance()
         if app is not None:
-            app.setStyleSheet(get_qss(theme))
+            app.setStyleSheet(qss)
         # 重建 agent 以应用新 API key
         pass  # 由主程序处理
 

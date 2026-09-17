@@ -40,6 +40,7 @@ except ImportError as e:
 # 导入应用模块（这里报错说明项目文件有问题）
 try:
     from desktop.config  import APP_NAME, APP_VERSION, load_config, save_config, get_qss, DB_FILE
+    from desktop.theme   import install_shim as theme_install_shim
     from desktop.system  import SystemTray, GlobalHotkey, AutoStart
     from desktop.screenshot import ScreenshotSelector, OCRThread
     from ui.main_window  import MainWindow, AGIWorker
@@ -334,6 +335,7 @@ class AGIApp:
         self.app.setFont(QFont(_default_font(), 9))
 
         self.cfg    = load_config()
+        theme_install_shim(self.cfg.get("theme", "dark"))
         self.app.setStyleSheet(get_qss(self.cfg.get("theme", "dark")))
         self.agent  = None
         self._float_worker = None
