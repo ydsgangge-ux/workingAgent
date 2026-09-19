@@ -108,7 +108,8 @@ class BLayerExecutor:
         context: str = "",
         use_tools: bool = True,
         max_tokens: int = 16384,
-        user_input: str = ""
+        user_input: str = "",
+        only_tools: Optional[List[str]] = None,   # 传入则强制只允许这些工具
     ) -> Dict[str, Any]:
         """
         执行一个需要工具的任务
@@ -130,14 +131,14 @@ class BLayerExecutor:
             return {"result": result, "steps": [], "tools_used": [], "success": True}
 
         # 获取可用工具 schema
-        schemas = self._get_available_schemas()
+        schemas = self._get_available_schemas(only_tools=only_tools)
 
         # 构建系统提示
-        base_system_prompt = self._build_system_prompt(context)
+        base_system_prompt = self._build_system_prompt(context, only_tools=only_tools)
 
         # 执行前先让 LLM 产出分步计划（可选；失败自动回退无计划）
         extra_plan = self._plan_task(task, context, base_system_prompt)
-        system_prompt = self._build_system_prompt(context, extra_plan=extra_plan)
+        system_prompt = self._build_system_prompt(context, extra_plan=extra_plan, only_tools=only_tools)
 
         # 消息历史
         messages = [{"role": "user", "content": task}]
@@ -182,6 +183,12 @@ class BLayerExecutor:
             # 如果没有工具调用，这就是最终答案
             if not tool_calls:
                 self._log("完成", f"步骤 {step+1}，无更多工具调用")
+                # 收尾 LLM 若本身失败了，别让失败文本覆盖“已成功执行的工具战果”
+                if not text_content or text_content.startswith("API调用失败"):
+                    fb = self._fallback_successful_steps(steps)
+                    if fb:
+                        text_content = fb
+                        self._log("回退", "最终 LLM 失败，回退到已成功工具结果")
                 return {
                     "result": text_content,
                     "steps": steps,
@@ -536,11 +543,12 @@ class BLayerExecutor:
                         )
                         with urllib.request.urlopen(req2, timeout=60) as resp2:
                             data = json.loads(resp2.read().decode("utf-8"))
-                        msg = data["choices"][0]["message"]
+                        choices = data.get("choices") or []
+                        msg = (choices[0].get("message") or {}) if choices else {}
                         blks = []
                         if msg.get("content"):
                             blks.append({"type": "text", "text": msg["content"]})
-                        for tc in msg.get("tool_calls", []):
+                        for tc in (msg.get("tool_calls") or []):
                             try:
                                 args = json.loads(tc["function"]["arguments"])
                             except Exception:
@@ -752,16 +760,18 @@ class BLayerExecutor:
             return [{"type": "text",
                      "text": "（Mock模式）我明白了你的需求，请配置真实 API Key 获得完整工具执行能力。"}]
 
-    def _get_available_schemas(self) -> List[Dict]:
+    def _get_available_schemas(self, only_tools: Optional[List[str]] = None) -> List[Dict]:
         schemas = get_all_schemas()
-        if self.allowed_tools is not None:
+        # only_tools 优先级最高；其次 self.allowed_tools；None 则放开全部
+        allowed = only_tools if only_tools is not None else self.allowed_tools
+        if allowed is not None:
             schemas = [
                 s for s in schemas
-                if s["name"] in self.allowed_tools
+                if s["name"] in allowed
             ]
         # 追加动态工具（LLM之前学会的技能）
         for name, info in self._dynamic_tools.items():
-            if self.allowed_tools is not None and name not in self.allowed_tools:
+            if allowed is not None and name not in allowed:
                 continue
             schemas.append({
                 "name": name,
@@ -953,10 +963,13 @@ class BLayerExecutor:
         except Exception as e:
             self._log("校验", f"校验异常放行：{type(e).__name__}")
 
-    def _build_system_prompt(self, context: str, extra_plan: str = "") -> str:
+    def _build_system_prompt(self, context: str, extra_plan: str = "",
+                             only_tools: Optional[List[str]] = None) -> str:
         tools_list = ", ".join(
-            name for name in (self.allowed_tools or list(TOOL_REGISTRY.keys()))
+            name for name in (only_tools or self.allowed_tools or list(TOOL_REGISTRY.keys()))
         )
+        if only_tools:
+            tools_list = f"【强制只用这些工具】{tools_list}"
         base = f"""你是一个强大的 AI 执行助手，必须通过调用工具完成任务，不能只用文字回答。
 
 可用工具：{tools_list}
@@ -1303,6 +1316,27 @@ class BLayerExecutor:
         # 取前20个中文或英文字符，转成snake_case
         clean = re.sub(r'[^\w\u4e00-\u9fff]', '_', task[:20]).strip('_')
         return f"dynamic_{clean}" if clean else "dynamic_tool"
+
+    @staticmethod
+    def _fallback_successful_steps(steps: list) -> str:
+        """
+        容错（第一层）：收尾 LLM 失败时，从已成功执行的工具结果里取最近一条
+        有实质内容的结果作为回退答案，避免“明明抓到了数据却因收尾失败整体丢弃”。
+        """
+        if not steps:
+            return ""
+        for s in reversed(steps):
+            r = s.get("result") or {}
+            if not r.get("ok"):
+                continue
+            for key in ("text", "content", "summary", "answer", "report", "output"):
+                v = r.get(key)
+                if isinstance(v, str) and v.strip():
+                    return (
+                        "（最终汇总未生成，以下为最近一处成功执行的原始工具结果）\n"
+                        f"[{s.get('tool')}] {v[:3000]}"
+                    )
+        return ""
 
     def _summarize_steps(self, steps: list, tools_used: list) -> str:
         """汇总已完成的步骤，用于超限/失败时的部分结果返回"""

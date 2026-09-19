@@ -552,7 +552,15 @@ class ConsciousnessAgent:
         self._log("推理", f"{think_tag} | {reasoning.get('inner_reasoning', '')}")
 
         storage_decision = reasoning.get("storage_decision", {})
-        need_tools = reasoning.get("need_tools", False) or task_type == "task"
+        # 用户点名具体工具 → 强制 A 层开启工具并命令 B 层必须用该工具
+        forced_tool = self._detect_named_tool(user_input)
+        if forced_tool:
+            self._log("工具", f"用户点名工具 → 强制 B 层使用 {forced_tool}")
+        need_tools = (
+            reasoning.get("need_tools", False)
+            or task_type == "task"
+            or forced_tool is not None
+        )
 
         # ④ 工具执行
         tool_result_section = ""
@@ -562,6 +570,12 @@ class ConsciousnessAgent:
         # ── B 层执行 ──
         if need_tools:
             tool_task = reasoning.get("tool_task") or user_input
+            if forced_tool:
+                tool_task = (
+                    f"请严格且只使用工具 {forced_tool} 来完成用户的这条要求，不要调用其它工具。\n"
+                    f"用户原话：{user_input}\n"
+                    f"（这是用户点名指定的工具，必须实际调用它，回答必须基于它的真实返回结果）"
+                )
 
             # 检测用户是否要把"刚才的对话内容"传给工具（保存/转PDF/翻译/总结等）
             _content_transfer_keywords = (
@@ -609,11 +623,14 @@ class ConsciousnessAgent:
 
             exec_result = self.b.execute_task(
                 task=tool_task, context=context, use_tools=True,
-                max_tokens=_max_tokens, user_input=user_input
+                max_tokens=_max_tokens, user_input=user_input,
+                only_tools=([forced_tool] if forced_tool else None),
             )
             tool_steps  = exec_result.get("steps", [])
             tools_used  = exec_result.get("tools_used", [])
 
+            # ── 工具结果：若收尾汇总失败(API调用失败)，回退到已成功步骤的真实结果 ──
+            res_txt = self._exec_safe_result(exec_result, tool_steps)
             if not exec_result.get("success"):
                 tool_result_section = (
                     f"\n⚠️ 你的助手刚帮你执行了一个操作，但遇到了问题。"
@@ -621,14 +638,18 @@ class ConsciousnessAgent:
                     f"问题详情：{exec_result.get('result', '未知错误')[:1500]}\n"
                     f"已完成步骤：{len(tool_steps)} 步\n"
                 )
+                # 即便整体未成功，若回退到真实结果，也要如实用上，别浪费战果
+                if res_txt and not res_txt.startswith("API调用失败") and \
+                        exec_result.get('result', '').startswith('API调用失败'):
+                    tool_result_section += f"其中可用的真实结果：\n{res_txt[:1500]}\n"
                 self._log("工具结果", f"未完全成功，{len(tool_steps)} 步")
-            elif exec_result.get("result"):
+            elif res_txt:
                 tool_result_section = (
                     f"\n⚠️ 你的助手刚帮你完成了以下操作，结果如下。"
                     f"你必须基于这个真实结果回应用户，用你自己的话说出来，不要忽略或否认。\n"
-                    f"执行结果：\n{exec_result['result'][:1500]}\n"
+                    f"执行结果：\n{res_txt[:1500]}\n"
                 )
-                self._log("工具结果", exec_result["result"][:200])
+                self._log("工具结果", res_txt[:200])
 
             if tools_used and storage_decision.get("should_store", True):
                 storage_decision["what_to_remember"] = (
@@ -933,6 +954,43 @@ class ConsciousnessAgent:
             "task_description": ""
         })
 
+    def _exec_safe_result(self, exec_result: dict, tool_steps: list) -> str:
+        """容错（第二层）：收尾汇总若失败(API调用失败)，回退到已成功步骤的真实结果"""
+        raw = exec_result.get("result") or ""
+        if raw and not raw.startswith("API调用失败"):
+            return raw
+        for st in reversed(tool_steps or []):
+            r = st.get("result") or {}
+            if not r.get("ok"):
+                continue
+            for key in ("text", "content", "summary", "answer", "report", "output"):
+                v = r.get(key)
+                if isinstance(v, str) and v.strip():
+                    return (
+                        "（最终汇总未生成，以下为最近一处成功执行的原始工具结果）\n"
+                        f"[{st.get('tool')}] {v[:3000]}"
+                    )
+        return raw
+
+    def _detect_named_tool(self, text: str) -> Optional[str]:
+        """
+        检测用户是否点名了某个具体工具（如 "用 browser_action"、"调用 create_ppt"）。
+        命中则返回该工具名，用于强制 B 层使用；未点名返回 None。
+        匹配已在注册表里的工具名（优先长名，避免短名误配）。
+        """
+        if not text:
+            return None
+        try:
+            from engine.tools import TOOL_REGISTRY
+        except Exception:
+            return None
+        names = sorted(TOOL_REGISTRY.keys(),
+                       key=lambda n: len(n), reverse=True)
+        for name in names:
+            if name and name in text:
+                return name
+        return None
+
     def _extract_entity_tags(self, content: str, raw_conversation: str) -> Dict:
         """
         实体型标签提取（增强关联网络）
@@ -1060,8 +1118,8 @@ class ConsciousnessAgent:
             current_time=datetime.now().strftime("%Y年%m%d月 %H:%M")
         )
         raw = self.b.generate(prompt, max_tokens=16384, temperature=0.5,
-                             thinking=self._should_think(thinking_mode, complexity, task_type))
-        return self._parse_json(raw, {
+                             thinking=False)  # 结构化 JSON 决策，不开 thinking 防止 MiMo 破坏格式
+        parsed = self._parse_json(raw, {
             "inner_reasoning":  "需要认真考虑",
             "response_intent":  "给出真实的回应",
             "response_tone":    self.personality.speech_style,
@@ -1069,6 +1127,10 @@ class ConsciousnessAgent:
             "tool_task":        "",
             "storage_decision": {"should_store": False, "reason": "解析失败"}
         })
+        if parsed.get("storage_decision", {}).get("reason") == "解析失败":
+            # 解析仍是兜底时，打出原始片段便于定位（不阻断流程）
+            print("[A层·推理JSON解析失败] raw_片段:", raw[:300].replace("\n", " "))
+        return parsed
 
     def _generate_response(
         self, user_input, memory_context,
@@ -1121,11 +1183,31 @@ class ConsciousnessAgent:
     def _parse_json(self, raw: str, fallback: Dict) -> Dict:
         try:
             import re as _re
-            # 剥掉可能包裹的 markdown 代码块围栏，再取最外层 JSON
-            cleaned = _re.sub(r'```[a-zA-Z]*', '', raw)
-            match = _re.search(r'\{[\s\S]*\}', cleaned)
-            if match:
-                return json.loads(match.group())
+            cleaned = raw
+            # 剥掉 markdown 代码块围栏
+            cleaned = _re.sub(r'```[a-zA-Z]*', '', cleaned)
+            # 剥掉思考/推理标签对（推理模型即便关不掉也不再影响 JSON）
+            cleaned = _re.sub(r'<[^>]*(reason|think)[^>]*>[\s\S]*?</[^>]*(reason|think)[^>]*>',
+                              '', cleaned, flags=_re.IGNORECASE)
+            # 依次在每个 '{' 处做括号深度平衡匹配，返回第一个能成功解析的对象
+            start = 0
+            while True:
+                start = cleaned.find("{", start)
+                if start == -1:
+                    break
+                depth = 0
+                for i in range(start, len(cleaned)):
+                    ch = cleaned[i]
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            try:
+                                return json.loads(cleaned[start:i + 1])
+                            except Exception:
+                                break  # 该对象无效，改从下一个 '{' 重试
+                start += 1
             return json.loads(cleaned)
         except Exception:
             return fallback

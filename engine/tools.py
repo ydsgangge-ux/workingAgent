@@ -15,6 +15,7 @@ import subprocess
 import shutil
 import glob
 import base64
+import threading
 import urllib.request
 import urllib.parse
 from pathlib import Path
@@ -845,65 +846,111 @@ def open_application(target: str) -> Dict:
         return {"ok": False, "error": str(e)}
 
 
+# 持久浏览器会话：跨调用复用同一浏览器/页面，模拟人连续操作
+_BR_SESSION = {"pw": None, "browser": None, "page": None}
+_BR_LOCK = threading.Lock()
+
+
+def _get_browser_page():
+    """惰性创建并复用浏览器，返回 (browser, page)；首次调用后才启动进程内常驻会话"""
+    from playwright.sync_api import sync_playwright
+    if _BR_SESSION["page"] is None:
+        pw = sync_playwright().start()
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        _BR_SESSION.update(pw=pw, browser=browser, page=page)
+    return _BR_SESSION["browser"], _BR_SESSION["page"]
+
+
+def _close_browser():
+    """关闭当前浏览器并清空会话状态"""
+    for key in ("page", "browser"):
+        obj = _BR_SESSION.get(key)
+        if obj is not None:
+            try:
+                obj.close()
+            except Exception:
+                pass
+            _BR_SESSION[key] = None
+    pw = _BR_SESSION.get("pw")
+    if pw is not None:
+        try:
+            pw.stop()
+        except Exception:
+            pass
+        _BR_SESSION["pw"] = None
+
+
 @register_tool(
     name="browser_action",
-    description="控制浏览器：打开URL、获取页面内容、点击元素。需要 playwright",
+    description="控制浏览器（持久会话，跨多次调用保持同一页面）：open_url 打开 / get_text 读当前页文字(可选selector) / click_text 按文字点 / click_selector 按CSS点 / fill_input 填输入框 / press_enter 回车提交 / get_screenshot 截图 / get_url 当前地址 / close 关闭会话。适合发邮件、搜资料、点击操作等连续流程",
     parameters={
         "action": {"type": "string",
-                   "description": "操作类型：open_url / get_text / click_text / fill_input / get_screenshot",
+                   "description": "操作类型：open_url / get_text / click_text / click_selector / fill_input / press_enter / get_screenshot / get_url / close",
                    "required": True},
         "url": {"type": "string", "description": "目标 URL（open_url 时必填）"},
-        "selector": {"type": "string", "description": "CSS 选择器或文字内容"},
+        "selector": {"type": "string", "description": "get_text 的CSS选择器或 click_text 的文字/ click_selector 的CSS"},
         "value": {"type": "string", "description": "填写的内容（fill_input 时）"}
     },
     risk="medium"
 )
 def browser_action(action: str, url: str = None,
                    selector: str = None, value: str = None) -> Dict:
-    try:
-        from playwright.sync_api import sync_playwright
+    with _BR_LOCK:
+        try:
+            if action == "close":
+                _close_browser()
+                return {"ok": True, "closed": True}
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            if not _BR_SESSION.get("page"):
+                _get_browser_page()
+            page = _BR_SESSION["page"]
 
             if action == "open_url" and url:
-                page.goto(url, timeout=15000)
-                title = page.title()
-                browser.close()
-                return {"ok": True, "title": title, "url": url}
+                page.goto(url, timeout=20000)
+                page.wait_for_load_state("domcontentloaded")
+                return {"ok": True, "title": page.title(), "url": url}
 
-            elif action == "get_text" and url:
-                page.goto(url, timeout=15000)
-                text = page.inner_text("body")[:8000]
-                browser.close()
-                return {"ok": True, "text": text}
+            elif action == "get_text":
+                if url:
+                    page.goto(url, timeout=20000)
+                    page.wait_for_load_state("domcontentloaded")
+                text = page.inner_text(selector or "body")
+                return {"ok": True, "text": text[:8000]}
 
             elif action == "click_text" and selector:
-                page.get_by_text(selector).first.click()
+                page.get_by_text(selector).first.click(timeout=10000)
                 page.wait_for_load_state()
-                browser.close()
                 return {"ok": True, "clicked": selector}
+
+            elif action == "click_selector" and selector:
+                page.click(selector, timeout=10000)
+                page.wait_for_load_state()
+                return {"ok": True, "clicked_selector": selector}
 
             elif action == "fill_input" and selector and value:
                 page.fill(selector, value)
-                browser.close()
                 return {"ok": True, "filled": selector}
 
+            elif action == "press_enter":
+                page.keyboard.press("Enter")
+                page.wait_for_load_state()
+                return {"ok": True, "pressed": "Enter"}
+
             elif action == "get_screenshot":
-                img_bytes = page.screenshot()
-                b64 = base64.b64encode(img_bytes).decode()
-                browser.close()
+                b64 = base64.b64encode(page.screenshot()).decode()
                 return {"ok": True, "image_base64": b64}
 
-            browser.close()
+            elif action == "get_url":
+                return {"ok": True, "url": page.url}
+
             return {"ok": False, "error": f"未知操作: {action}"}
 
-    except ImportError:
-        return {"ok": False,
-                "error": "需要安装：pip install playwright && playwright install chromium"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+        except ImportError:
+            return {"ok": False,
+                    "error": "需要安装：pip install playwright && playwright install chromium"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
 
 # ═══════════════════════════════════════════════════
