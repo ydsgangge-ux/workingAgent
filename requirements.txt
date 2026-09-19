@@ -43,6 +43,9 @@ fastapi>=0.110.0
 uvicorn>=0.27.0
 PyJWT>=2.8.0
 
+# Feishu / Lark bot（长连接，可选）
+lark-oapi>=1.6.5
+
 # Semantic memory retrieval (语义向量检索，可选但强烈建议安装)
 # 不装则降级为关键词匹配，检索准确性大幅下降
 # 需要 torch 支持，Windows 下建议单独安装：

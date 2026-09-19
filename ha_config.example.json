@@ -10,6 +10,8 @@
   "amap_key": "你的高德 Web 服务 API Key（可在 console.amap.com 申请）",
   "wecom_bot_id": "企业微信智能机器人 BotID",
   "wecom_bot_secret": "企业微信智能机器人 Secret（长连接专用）",
+  "lark_app_id": "飞书自建应用 App ID",
+  "lark_app_secret": "飞书自建应用 App Secret",
   "wake_words": [
     "焕灵"
   ],

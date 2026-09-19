@@ -107,7 +107,7 @@ class BLayerExecutor:
         task: str,
         context: str = "",
         use_tools: bool = True,
-        max_tokens: int = 4000,
+        max_tokens: int = 16384,
         user_input: str = ""
     ) -> Dict[str, Any]:
         """
@@ -307,13 +307,13 @@ class BLayerExecutor:
             OllamaClient, DeepSeekClient, OpenAIClient, GroqClient,
             ClaudeClient, GeminiClient,
             QwenClient, ZhipuClient, DoubaoClient, KimiClient,
-            BaiduClient, SparkClient,
+            BaiduClient, SparkClient, MiMoClient,
         )
         # OpenAI 兼容格式（DeepSeek / OpenAI / Groq / 国产大模型）
         _openai_compat = (
             DeepSeekClient, OpenAIClient, GroqClient,
             QwenClient, ZhipuClient, DoubaoClient, KimiClient,
-            BaiduClient, SparkClient,
+            BaiduClient, SparkClient, MiMoClient,
         )
         if isinstance(self.llm, _openai_compat):
             return self._call_openai_tools(messages, system, tools, max_tokens)

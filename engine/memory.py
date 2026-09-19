@@ -541,6 +541,27 @@ class MemoryStore:
             ).fetchall()
         return [self._row_to_node(r) for r in rows if r]
 
+    def list_by_level(
+        self,
+        level: MemoryLevel,
+        user_id: Optional[str] = None,
+        limit: Optional[int] = None
+    ) -> List[MemoryNode]:
+        """按层级拉取全部记忆（含 embedding），供联想扫描用"""
+        conditions = ["level=?"]
+        params: list = [level.value]
+        if user_id is not None:
+            conditions.append("(user_id=? OR user_id='default' OR user_id='system')")
+            params.append(user_id)
+        where = " AND ".join(conditions)
+        sql = (f"SELECT * FROM memories WHERE {where} "
+               f"ORDER BY importance DESC, created_at DESC")
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        with guarded_connect(self.db_path) as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._row_to_node(r) for r in rows if r]
+
     def log_interaction(
         self,
         user_input: str,

@@ -1325,6 +1325,22 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
         </div>
       </div>
 
+      <div class="card">
+        <div class="section-title">🧠 记忆联想</div>
+        <div class="field">
+          <label>启用联想</label>
+          <label class="switch"><input type="checkbox" id="cfg-assoc-enable"><span class="slider"></span></label>
+        </div>
+        <div class="field">
+          <label>联想温度（越小越精、越少）</label>
+          <input id="cfg-assoc-temp" class="input" type="number" min="0.05" max="1.0" step="0.05">
+        </div>
+        <div class="field">
+          <label>联想条数上限（封顶）</label>
+          <input id="cfg-assoc-k" class="input" type="number" min="1" max="10" step="1">
+        </div>
+      </div>
+
       <div style="display:flex;gap:.8rem;align-items:center">
         <button class="btn save-btn" onclick="saveSettings()">💾 保存设置</button>
         <span class="ok-msg" id="settings-msg"></span>
@@ -2062,6 +2078,10 @@ async function loadSettings(){
     document.getElementById('cfg-think-mode').value=cfg.thinking_mode||'auto';
     document.getElementById('cfg-think-effort').value=cfg.thinking_effort||'high';
     document.getElementById('cfg-think-budget').value=cfg.thinking_budget||8000;
+    // 记忆联想
+    document.getElementById('cfg-assoc-enable').checked=cfg.assoc_enable!==false;
+    document.getElementById('cfg-assoc-temp').value=cfg.assoc_temp||0.15;
+    document.getElementById('cfg-assoc-k').value=cfg.assoc_k||3;
   }catch(e){console.error('loadSettings',e);}
 }
 
@@ -2091,6 +2111,9 @@ async function saveSettings(){
   cfg.thinking_mode=document.getElementById('cfg-think-mode').value;
   cfg.thinking_effort=document.getElementById('cfg-think-effort').value;
   cfg.thinking_budget=parseInt(document.getElementById('cfg-think-budget').value)||8000;
+  cfg.assoc_enable=document.getElementById('cfg-assoc-enable').checked;
+  cfg.assoc_temp=parseFloat(document.getElementById('cfg-assoc-temp').value)||0.15;
+  cfg.assoc_k=parseInt(document.getElementById('cfg-assoc-k').value)||3;
   try{
     var r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})});
     if(r.ok){msg.textContent='✅ 已保存，重启后生效';msg.style.color='var(--ok)';}

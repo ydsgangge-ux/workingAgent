@@ -2778,21 +2778,32 @@ def create_excel(path: str, data: str, sheet_name: str = "Sheet1") -> Dict:
 
 @register_tool(
     name="create_ppt",
-    description="创建 PowerPoint 演示文稿（.pptx）",
+    description="创建 PowerPoint 演示文稿（.pptx）。两种方式任选其一："
+                "1) code：直接给一段 python-pptx 代码，完全自定义配色/封面/版式/色块（AI 自己写代码，如同生成HTML时自己写CSS，效果最精美）。"
+                "代码内 from pptx import Presentation 自行布局，最后调用 prs.save(PATH)（PATH 已作为变量注入）。"
+                "2) slides_json：结构化数据自动套用内置精美主题，每项含 title/subtitle/layout(cover封面,agenda目录,content内容,quote金句,ending结尾)/content/bullets(可带level 0或1)。"
+                "传 code 时以 code 为准；只传 slides_json 时务必给出 cover 与 ending，中间用 content 分节、可穿插 quote 金句。",
     parameters={
         "path":        {"type": "string", "description": "保存路径或文件名", "required": True},
         "slides_json": {"type": "string",
-                       "description": 'JSON数组，每项含 title/content/bullets，如 [{"title":"介绍","bullets":["要点1","要点2"]}]',
-                       "required": True}
+                       "description": "可选。JSON数组，每项含 title/subtitle/layout/content/bullets，如 [{\"layout\":\"cover\",\"title\":\"年度总结\",\"subtitle\":\"副标题\"}]",
+                       "required": False},
+        "code":        {"type": "string",
+                       "description": "可选。python-pptx 代码（from pptx import Presentation ... prs.save(PATH)），用于完全自定义版式",
+                       "required": False}
     },
     risk="medium"
 )
-def create_ppt(path: str, slides_json: str) -> Dict:
-    from engine.office_tools import create_pptx
+def create_ppt(path: str, slides_json: str = "", code: str = "") -> Dict:
+    from engine.office_tools import create_pptx, create_ppt_from_code
+    if code and code.strip():
+        return create_ppt_from_code(path, code)
     try:
-        slides = json.loads(slides_json)
+        slides = json.loads(slides_json) if slides_json and slides_json.strip() else []
     except Exception:
         return {"ok": False, "error": "slides_json 必须是有效的 JSON 数组"}
+    if not slides:
+        return {"ok": False, "error": "请提供 code 或非空的 slides_json 之一"}
     return create_pptx(path, slides)
 
 
@@ -2809,6 +2820,49 @@ def create_ppt(path: str, slides_json: str) -> Dict:
 def create_pdf_file(path: str, content: str, title: str = "") -> Dict:
     from engine.office_tools import create_pdf
     return create_pdf(path, content, title)
+
+
+@register_tool(
+    name="annotate_pdf",
+    description="把 PDF 逐页渲染成截图并在指定文字上做精准标注，返回多张 PNG 图片（可用 image 消息连发）。"
+                "用法：先读 PDF 文本（read_office 或 read_file），挑出要强调的句子作为 marks.text；"
+                "marks 为 JSON 数组，每项 {\"page\":页号(从1起), \"text\":要框住的文字, \"label\":可选说明}。"
+                "marks 留空则只渲染所选页面截图、不加框。path 用用户上传时看到的 [文件:...] 里的路径。",
+    parameters={
+        "path":  {"type": "string", "description": "PDF 文件路径", "required": True},
+        "pages": {"type": "string", "description": "要处理的页，all(默认)/1,3-5/2", "required": False},
+        "marks": {"type": "string", "description": '可选。JSON数组 [{"page":1,"text":"小南","label":"标题"}]', "required": False},
+        "title": {"type": "string", "description": "可选。页面信息条标题（默认用文件名）", "required": False}
+    },
+    risk="low"
+)
+def annotate_pdf_tool(path: str, pages: str = "all",
+                      marks: str = "[]", title: str = "") -> Dict:
+    from engine import pdf_annotate
+    try:
+        parsed_marks = json.loads(marks) if marks and marks.strip() else []
+        if not isinstance(parsed_marks, list):
+            parsed_marks = []
+    except Exception:
+        parsed_marks = []
+    # 输出到系统临时目录，后续由 agent 交付块拷贝进 downloads 再以图片消息发出
+    import tempfile
+    out_dir = os.path.join(tempfile.gettempdir(), "aa_annotate")
+    page_nums = None
+    if str(pages).strip().lower() not in ("all", "*", ""):
+        try:
+            import fitz
+            page_count = fitz.open(os.path.expanduser(path)).page_count
+            page_nums = pdf_annotate._parse_pages(pages, page_count)
+        except Exception:
+            page_nums = None
+    res = pdf_annotate.annotate_pdf(path, out_dir, marks=parsed_marks or None,
+                                    title=title, dpi=150, page_nums=page_nums)
+    if not res.get("ok"):
+        return res
+    images = res.get("images", [])
+    return {"ok": True, "path": images[0] if images else "",
+            "images": images, "type": "png", "count": len(images)}
 
 
 @register_tool(

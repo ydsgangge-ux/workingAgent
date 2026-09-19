@@ -239,6 +239,21 @@ except ImportError:
 except Exception as e:
     print(f"[WecomBot] 启动失败（{e}），企业微信不可用")
 
+# ── 飞书智能机器人（长连接，独立线程）────────────────
+try:
+    from lark_bot import LarkBot
+    import threading
+
+    _lark_bot = LarkBot(agent)
+    _lark_thread = threading.Thread(target=_lark_bot.start, daemon=True)
+    _lark_thread.start()
+    print("[LarkBot] 飞书机器人已在后台启动")
+except ImportError:
+    print("[LarkBot] lark-oapi 未安装，飞书不可用")
+    print("[LarkBot] 安装: pip install lark-oapi>=1.6.5")
+except Exception as e:
+    print(f"[LarkBot] 启动失败（{e}），飞书不可用")
+
 # ── 启动 Web 服务（主线程阻塞式，适合服务器）────────────────
 import server as _server_module
 import uvicorn

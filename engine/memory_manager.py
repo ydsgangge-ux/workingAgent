@@ -15,10 +15,11 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from engine.memory import MemoryStore, MemoryLevel, MemoryModality
+from engine.memory import MemoryStore, MemoryLevel, MemoryModality, cosine_similarity
 from engine.models import MemoryNode, EmotionState
 from typing import Dict, List, Tuple, Any, Optional
 import uuid
+import math
 
 
 class HierarchicalMemoryManager:
@@ -58,6 +59,12 @@ class HierarchicalMemoryManager:
 
         if not summaries:
             return results
+
+        # ══ 联想增强（query-time：embedding + softmax + 封顶）══
+        try:
+            self._add_associations(results, user_id)
+        except Exception:
+            pass
 
         # ══ 关联网络涟漪（基于大纲种子） ════════
         if self.net:
@@ -137,7 +144,8 @@ class HierarchicalMemoryManager:
         tags: List[str] = None, source: str = "conversation",
         user_id: str = "default",
         user_name: str = "",
-        raw_content: str = None   # 原始对话内容，细节层用这个
+        raw_content: str = None,   # 原始对话内容，细节层用这个
+        entity_typed: Dict[str, List[str]] = None   # 实体型标签 {type:[name]}，建强边用
     ) -> Dict[str, str]:
         stored_ids = {}
         base_id = str(uuid.uuid4())[:8]
@@ -184,12 +192,16 @@ class HierarchicalMemoryManager:
         # 关联网络
         if self.net and tags:
             from engine.association import AssociationAnalyzer
-            entities = AssociationAnalyzer.extract_entities(content, tags)
             primary_id = (stored_ids.get("detail")
                           or stored_ids.get("outline")
                           or stored_ids.get("summary"))
+            # 优先用 LLM 实体型标签(带类型)，替代窄词库误抽；没有则退回词库规则
+            entities = entity_typed
+            if not entities:
+                entities = AssociationAnalyzer.extract_entities(content, tags)
             for etype, enames in entities.items():
                 for ename in enames:
+                    # register_entity 对重复实体自动建 0.75 强关联
                     self.net.register_entity(ename, etype, primary_id)
 
         return stored_ids
@@ -225,6 +237,81 @@ class HierarchicalMemoryManager:
             parts.append(tag_str)
 
         return "  ".join(parts)[:200]
+
+    # ══════════════════════════════════════════════
+    # 联想增强（query-time：embedding + softmax + 封顶）
+    # ══════════════════════════════════════════════
+    def _assoc_cfg(self) -> Dict[str, Any]:
+        """读取联想配置（可被 config 覆盖，默认值见下）"""
+        cfg = {"enable": True, "seed": 3, "pool": 30,
+               "temp": 0.15, "k": 3, "min": 0.0}
+        try:
+            from desktop.config import load_config
+            c = load_config()
+            cfg = {
+                "enable": bool(c.get("assoc_enable", cfg["enable"])),
+                "seed":   int(c.get("assoc_seed", cfg["seed"])),
+                "pool":   int(c.get("assoc_pool", cfg["pool"])),
+                "temp":   float(c.get("assoc_temp", cfg["temp"])),
+                "k":      int(c.get("assoc_k", cfg["k"])),
+                "min":    float(c.get("assoc_min", cfg["min"])),
+            }
+        except Exception:
+            pass
+        return cfg
+
+    def _add_associations(self, results: Dict[str, Any], user_id=None) -> None:
+        """
+        联想增强：以命中大纲为种子，与同库各摘要算余弦相似度。
+        取 top-pool → softmax(T) 加权 → top-k 封顶 → 写入 results["associations"]。
+        不改变主检索；无联想/开不了时保持空。
+        """
+        cfg = self._assoc_cfg()
+        if not cfg["enable"]:
+            return
+        seeds = [n for n, _ in results.get("summary", [])[:cfg["seed"]]
+                 if getattr(n, "embedding", None)]
+        if not seeds:
+            return
+        seed_embs = [n.embedding for n in seeds]
+
+        # 排除已在主命中的节点（避免重复）
+        excluded = set()
+        for key in ("summary", "outline", "detail"):
+            for node, _ in results.get(key, []):
+                excluded.add(node.id)
+
+        cands = []
+        for node in self.store.list_by_level(MemoryLevel.SUMMARY, user_id=user_id) or []:
+            if node.id in excluded or not getattr(node, "embedding", None):
+                continue
+            sim = max(cosine_similarity(node.embedding, se) for se in seed_embs)
+            cands.append((node, sim))
+        cands.sort(key=lambda x: x[1], reverse=True)
+        if not cands:
+            return
+        cands = cands[:cfg["pool"]]
+
+        # softmax 温度加权（偏移最大值防溢出）
+        T = cfg["temp"] if cfg["temp"] and cfg["temp"] > 0 else 0.15
+        mx = max(s for _, s in cands)
+        ws = [math.exp((s - mx) / T) for _, s in cands]
+        z = sum(ws) or 1.0
+        probs = [w / z for w in ws]
+
+        ranked = sorted(zip(cands, probs), key=lambda x: x[1], reverse=True)[:cfg["k"]]
+        acc = []
+        for (node, sim), prob in ranked:
+            if cfg["min"] and sim < cfg["min"]:
+                continue
+            acc.append({
+                "memory_id": node.id,
+                "content": node.content[:300],
+                "score": round(sim, 3),
+                "prob": round(prob, 3),
+                "source": "similar",
+            })
+        results["associations"] = acc
 
     # ══════════════════════════════════════════════
     # 格式化（清晰展示两阶段结果）
@@ -303,6 +390,15 @@ class HierarchicalMemoryManager:
                     lines.append(
                         f"  ↳ [{assoc_label}{shared_str}] {content[:200]}{user_tag}"
                     )
+
+        # ── 联想增强（query-time 相似联想）────────
+        assoc_list = results.get("associations") or []
+        if assoc_list:
+            lines.append(f"\n▌ 联想到的更早记忆（{len(assoc_list)} 条相似联想）")
+            for a in assoc_list[:5]:
+                lines.append(
+                    f"  ↳ [联想·相似度{a.get('score',0):.2f}] {a.get('content','')}"
+                )
 
         return "\n".join(lines)
 

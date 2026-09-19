@@ -2064,6 +2064,38 @@ class SettingsPage(QWidget):
         wecom_status_lbl.setStyleSheet(f"color:{wecom_status_color};font-size:11px;")
         wecom_lay.addWidget(wecom_status_lbl, 3, 1)
 
+        # 飞书机器人
+        lark_box = QGroupBox("💬 飞书机器人")
+        lark_lay = QGridLayout(lark_box)
+
+        lark_lay.addWidget(QLabel("App ID:"), 0, 0)
+        self._lark_app_id = QLineEdit(self._cfg.get("lark_app_id", ""))
+        self._lark_app_id.setPlaceholderText("飞书自建应用 App ID (cli_...)")
+        lark_lay.addWidget(self._lark_app_id, 0, 1)
+
+        lark_lay.addWidget(QLabel("App Secret:"), 1, 0)
+        self._lark_app_secret = QLineEdit(self._cfg.get("lark_app_secret", ""))
+        self._lark_app_secret.setEchoMode(QLineEdit.EchoMode.Password)
+        self._lark_app_secret.setPlaceholderText("飞书自建应用 App Secret")
+        lark_lay.addWidget(self._lark_app_secret, 1, 1)
+
+        lark_hint = QLabel("在飞书开放平台创建企业自建应用，订阅 im.message.receive_v1 并选「长连接」，开通 im:resource / im:message 权限。重启后生效。")
+        lark_hint.setStyleSheet("color:#8b949e;font-size:11px;")
+        lark_hint.setWordWrap(True)
+        lark_lay.addWidget(lark_hint, 2, 1)
+
+        # 检测 lark-oapi 是否安装
+        try:
+            import lark_oapi
+            lark_status = "✅ lark-oapi 已安装"
+            lark_status_color = "#3fb950"
+        except ImportError:
+            lark_status = "⚠️ 未安装，运行: pip install lark-oapi>=1.6.5"
+            lark_status_color = "#d29922"
+        lark_status_lbl = QLabel(lark_status)
+        lark_status_lbl.setStyleSheet(f"color:{lark_status_color};font-size:11px;")
+        lark_lay.addWidget(lark_status_lbl, 3, 1)
+
         layout.addWidget(api_box)
         layout.addWidget(vision_box)
         layout.addWidget(hotkey_box)
@@ -2074,6 +2106,7 @@ class SettingsPage(QWidget):
         layout.addWidget(sensor_box)
         layout.addWidget(news_box)
         layout.addWidget(wecom_box)
+        layout.addWidget(lark_box)
         layout.addWidget(ocr_box)
         layout.addWidget(btn_save)
         layout.addWidget(self._save_msg)
@@ -2243,6 +2276,9 @@ class SettingsPage(QWidget):
         # 企业微信机器人
         self._cfg["wecom_bot_id"]      = self._wecom_bot_id.text().strip()
         self._cfg["wecom_bot_secret"]  = self._wecom_bot_secret.text().strip()
+        # 飞书机器人
+        self._cfg["lark_app_id"]       = self._lark_app_id.text().strip()
+        self._cfg["lark_app_secret"]   = self._lark_app_secret.text().strip()
 
         # 立即应用语言
         try:

@@ -71,6 +71,13 @@ DEFAULT_CONFIG = {
     # ── 企业微信机器人 ──
     "wecom_bot_id":       "",
     "wecom_bot_secret":   "",
+    # ── 飞书机器人 ──
+    "lark_app_id":        "",
+    "lark_app_secret":    "",
+    # ── 记忆联想增强（检索时相似记忆联想）──
+    "assoc_enable":       True,   # 联想总开关：false 则恢复纯原检索
+    "assoc_temp":         0.15,   # 联想温度：越小越精/越少，越大越多但杂
+    "assoc_k":            3,      # 每次最多联想条数（封顶，防命中率爆炸）
 }
 
 

@@ -68,10 +68,16 @@ PERCEPTION_PROMPT = """你是{name}，你是一个有真实身体和生活的普
   "initial_thoughts": "你对这个输入的第一反应（1-2句话，符合你的性格和你此刻的真实生活状态）",
   "topic_tags": ["话题标签1", "话题标签2", "话题标签3"],
   "needs_deep_memory": true或false（是否需要从记忆中检索深层信息）,
-  "task_type": "chat（普通对话）或 task（需要工具操作电脑/文件/网络的任务）",
-  "task_description": "如果是task，简述需要做什么",
+  "task_type": "chat（普通对话）或 task（需要动手做事/操作电脑/文件/网络/产出的任务）",
+  "task_description": "如果是task，用一句话写清楚要达成的目标",
   "complexity": "simple 或 complex（simple=闲聊/简单问答/打招呼/感谢，直接回答即可；complex=需要深度推理/分析/多步思考/创作/代码/数学等）
 }}
+
+【task_type 硬性规则】满足下面任一条，必须判为 task（禁止判成 chat）：
+- 用户要求"做/生成/创建/做出/写出/整理/修改/发给/保存/打开/搜索/查询/下载/上传/执行"某个对象或文件
+- 涉及文档/表格/PPT/PDF/图片/代码/数据/网页/联网等具体产出物或操作
+- 需要操作电脑、生产文件、联网获取信息得出结果
+只有纯打招呼、闲聊、情感交流、简单问答、问看法时才判 chat。
 
 complexity 判断标准：
 - simple：打招呼、闲聊、感谢、简单事实问答（"你好""谢谢""几点了""今天星期几"）、简单翻译、单个词语解释
@@ -105,7 +111,7 @@ REASONING_PROMPT = """你是{name}，一个有完整人格和记忆的意识主�
   "response_intent": "你想回应什么（核心意图）",
   "response_tone": "回应的语气/风格",
   "need_tools": true或false（是否需要调用工具）,
-  "tool_task": "如果need_tools=true，给B层的具体任务指令",
+  "tool_task": "如果need_tools=true，必填。像领导给下属布置工作一样，把要交付什么写清楚：目标 + 产出物(文件/结果) + 要求/约束 + 完成后交付给用户。禁止只写模糊意图。",
   "storage_decision": {{
     "should_store": true或false,
     "importance": 0.0到1.0,
@@ -123,6 +129,8 @@ REASONING_PROMPT = """你是{name}，一个有完整人格和记忆的意识主�
 - 当用户提到未来要做的计划时，schedule_info 必须填写，need_tools 设为 true，tool_task 中要求调用 add_schedule 工具。
 - 当你自己提议未来一起做什么并得到用户同意时，也要用 add_schedule 记录，source 设为 "system"。
 - 当用户要求定时提醒或定时执行时，timed_task_info 必须填写，need_tools 设为 true，tool_task 中要求调用 create_timed_task 工具。
+- 只要用户要求"做/生成/产出/操作/发给我/重新发"某个文件或任务，need_tools 必须为 true，且 tool_task 必须写完整交付要求（目标+产出物+约束+交付给谁），禁止只写"去做PPT"这种空命令。
+- tool_task 举例（仅示意结构，对象以用户需求为准）："目标=给用户做一份PPT；产出物=pptx文件，主题和内容按用户上文要求；约束=内容生动，面向小学生；交付=生成文件后把下载链接回给用户。"
 - 当你自己判断应该定时做某事时，也要填写 timed_task_info。例如：
   · 用户说在忙工作，你判断1小时后提醒休息
   · 用户提到下午有会，你主动设定会前10分钟提醒
@@ -427,6 +435,17 @@ class ConsciousnessAgent:
         )
         self.current_emotion = emotion
         task_type = perception.get("task_type", "chat")
+        # 兜底：不管模型怎么分类，明显产出/操作型指令强制判为 task（不依赖模型 JSON）
+        _TASK_SIGNALS = ("生成", "做成", "创建", "制作", "做一份", "做一个", "做一页",
+                         "重新发", "发给我", "发我", "发给", "发送", "上传", "下载",
+                         "文件", "PPT", "ppt", "pptx", "文档", "表格", "xlsx", "docx",
+                         "pdf", "报告", "图片", "压缩", "截图", "搜索", "查询", "整理",
+                         "修改", "脚本", "代码", "网页")
+        if any(sig in user_input for sig in _TASK_SIGNALS):
+            task_type = "task"
+        # 复杂度兜底：模型没给就按 complex 处理（宁多想不少想）
+        if not perception.get("complexity"):
+            perception["complexity"] = "complex"
         self._log(
             "感知",
             f"情绪={emotion.primary.value}({emotion.intensity:.2f}) | "
@@ -585,12 +604,8 @@ class ConsciousnessAgent:
                 except Exception:
                     pass
 
-            # 文章/文档生成类任务需要更大的 max_tokens
-            _doc_keywords = ("写一篇", "写一篇", "撰写", "写一个", "写一段",
-                             "文章", "文档", "报告", "作文", "随笔",
-                             "create_pdf", "create_docx", "write_file")
-            _is_doc_task = any(kw in tool_task for kw in _doc_keywords)
-            _max_tokens = 8000 if _is_doc_task else 4000
+            # 工具/文档生成类任务给足输出余量，避免长推理被截断
+            _max_tokens = 16384
 
             exec_result = self.b.execute_task(
                 task=tool_task, context=context, use_tools=True,
@@ -631,29 +646,53 @@ class ConsciousnessAgent:
                 except Exception:
                     pass
 
-            # ── 文件交付：将工具生成的 Office/PDF 文件拷贝到 Web 可下载目录 ──
+            # ── 文件/图片交付：拷贝到 Web 可下载目录，并打标记让飞书/Web 发送 ──
             try:
                 from pathlib import Path as _Path
                 import shutil
                 download_dir = _Path(__file__).parent.parent / "downloads"
                 download_dir.mkdir(parents=True, exist_ok=True)
+                _FILE_TYPES = ("docx", "xlsx", "pptx", "pdf")
+                _IMG_TYPES = ("png", "jpg", "jpeg", "webp", "gif", "image")
+
+                def _publish(src, kind):
+                    src = _Path(str(src))
+                    if not src.exists():
+                        return
+                    dst = download_dir / src.name
+                    try:
+                        if dst.resolve() != src.resolve():
+                            shutil.copy2(str(src), str(dst))
+                    except Exception:
+                        pass  # 已经是目标文件时原样使用
+                    if kind == "img":
+                        tool_result_section += f"\n[image:{src.name}:{src.name}]"
+                        self._log("图片", f"已发布: {src.name}")
+                    else:
+                        tool_result_section += (
+                            f"\n文件已生成，用户可通过以下链接下载："
+                            f"\n[download:{src.name}:{src.name}]"
+                        )
+                        self._log("文件", f"已发布: {src.name}")
+
                 for step in tool_steps:
                     step_result = step.get("result", {}) if isinstance(step, dict) else {}
-                    if isinstance(step_result, dict):
-                        file_path = step_result.get("path", "")
-                        file_type = step_result.get("type", "")
-                        if file_path and file_type in ("docx", "xlsx", "pptx", "pdf"):
-                            src = _Path(file_path)
-                            if src.exists():
-                                dst = download_dir / src.name
-                                shutil.copy2(str(src), str(dst))
-                                tool_result_section += (
-                                    f"\n文件已生成，用户可通过以下链接下载："
-                                    f"\n[download:{src.name}:{src.name}]"
-                                )
-                                self._log("文件", f"已发布: {src.name}")
+                    if not isinstance(step_result, dict):
+                        continue
+                    file_path = step_result.get("path", "")
+                    file_type = step_result.get("type", "") or ""
+                    images = step_result.get("images", []) or []
+                    if file_path and file_type in _FILE_TYPES:
+                        _publish(file_path, "file")
+                    if file_path and file_type in _IMG_TYPES:
+                        _publish(file_path, "img")
+                    for img in images:
+                        if isinstance(img, dict):
+                            img = img.get("path", "")
+                        if img:
+                            _publish(img, "img")
             except Exception as _fe:
-                self._log("文件", f"交付失败: {_fe}")
+                self._log("图/文件", f"交付失败: {_fe}")
 
         # ⑤ 生成回应（带完整对话历史）
         try:
@@ -711,16 +750,19 @@ class ConsciousnessAgent:
             except ValueError:
                 modality = MemoryModality.SEMANTIC
 
+            # 实体型标签：为关联网络提供具体实体（人名/地点/时间）的强边素材
+            entity_info = self._extract_entity_tags(content_to_store, raw_conversation)
             stored_ids = self.memory.store_with_hierarchy(
                 content=content_to_store,         # 大纲/细纲用摘要
                 raw_content=raw_conversation,      # 细节层用原始对话
                 modality=modality,
                 emotion=emotion,
                 importance=storage_decision.get("importance", 0.5),
-                tags=perception.get("topic_tags", []),
+                tags=entity_info.get("tags", []),
                 source="conversation",
                 user_id=current_uid,
                 user_name=current_user_name,
+                entity_typed=entity_info.get("entities", {}),
             )
             self._log(
                 "存储",
@@ -891,6 +933,52 @@ class ConsciousnessAgent:
             "task_description": ""
         })
 
+    def _extract_entity_tags(self, content: str, raw_conversation: str) -> Dict:
+        """
+        实体型标签提取（增强关联网络）
+        用 LLM 抽 3~6 个具体实体（人名/店名地名/具体事件时间/具体关系），
+        禁止泛主题词；输出 {"tags": [显示名], "entities": {type: [name]}}。
+        任何失败静默返回空，绝不影响存储主流程。
+        配置项：tag_enable(开关) tag_max(条数) tag_max_len(单字上限)
+        """
+        if not self._get_config("tag_enable", True):
+            return {"tags": [], "entities": {}}
+        tag_max = int(self._get_config("tag_max", 6))
+        tag_max_len = int(self._get_config("tag_max_len", 6))
+        try:
+            prompt = (
+                "从下面的对话内容中提取具体且可复现的实体作为联想标签。\n"
+                "只提取具体实体，禁止宽泛主题词（如：探索、生存、感想、变化）。\n"
+                "类型判定：\n"
+                "  - person 人物：具体人名（毛泽东、小明、妈妈）\n"
+                "  - place  地点：具体店名/地名（霜棘高地、老王餐厅）\n"
+                "  - time   时间：具体事件时间（7月12日小明生日、去年春节）\n"
+                "  - relation 关系：具体关系词（亲情、师徒）\n"
+                f"数量 3~{tag_max} 个，每个 2~{tag_max_len} 字，宁缺毋滥，没有就不填。\n"
+                "只输出 JSON：{\"entities\": [{\"name\": \"实体\", \"type\":"
+                " \"person|place|time|relation\"}]}\n\n"
+                f"对话内容：\n{content}\n\n{raw_conversation or ''}"
+            )
+            raw = self.b.generate(prompt, max_tokens=20,
+                                  temperature=0.3, thinking=False)
+            parsed = self._parse_json(raw, {"entities": []})
+            entities: Dict[str, List[str]] = {}
+            tags: List[str] = []
+            for e in (parsed.get("entities") or []):
+                if not isinstance(e, dict):
+                    continue
+                name = str(e.get("name", "")).strip()
+                etype = str(e.get("type", "semantic")).strip().lower()
+                if not name or len(name) > tag_max_len:
+                    continue
+                if etype not in ("person", "place", "time", "relation"):
+                    etype = "semantic"
+                entities.setdefault(etype, []).append(name)
+                tags.append(name)
+            return {"tags": tags[:tag_max], "entities": entities}
+        except Exception:
+            return {"tags": [], "entities": {}}
+
     def _get_config(self, key, default=None):
         """从配置文件读取值，带缓存"""
         if not self._cfg:
@@ -971,7 +1059,7 @@ class ConsciousnessAgent:
             recent_context=recent_context,
             current_time=datetime.now().strftime("%Y年%m%d月 %H:%M")
         )
-        raw = self.b.generate(prompt, max_tokens=800, temperature=0.5,
+        raw = self.b.generate(prompt, max_tokens=16384, temperature=0.5,
                              thinking=self._should_think(thinking_mode, complexity, task_type))
         return self._parse_json(raw, {
             "inner_reasoning":  "需要认真考虑",
@@ -1032,10 +1120,13 @@ class ConsciousnessAgent:
 
     def _parse_json(self, raw: str, fallback: Dict) -> Dict:
         try:
-            match = re.search(r'\{[\s\S]*\}', raw)
+            import re as _re
+            # 剥掉可能包裹的 markdown 代码块围栏，再取最外层 JSON
+            cleaned = _re.sub(r'```[a-zA-Z]*', '', raw)
+            match = _re.search(r'\{[\s\S]*\}', cleaned)
             if match:
                 return json.loads(match.group())
-            return json.loads(raw)
+            return json.loads(cleaned)
         except Exception:
             return fallback
 

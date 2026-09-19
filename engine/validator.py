@@ -83,6 +83,7 @@ _RULES: Dict[str, Dict[str, Any]] = {
     "create_pdf":     {"ext": ".pdf"},
     "create_docx":    {"ext": ".docx"},
     "create_pptx":    {"ext": ".pptx"},
+    "annotate_pdf":   {"ext": ".png"},
     "write_file":     {"min_size": 4},
 }
 

@@ -311,58 +311,188 @@ def create_xlsx(path: str, data: Any, sheet_name: str = "Sheet1") -> Dict:
         return {"ok": False, "error": str(e)}
 
 
+# ── 默认 PPT 主题（内置精美版式，模型不写代码时的兜底）──────────────
+def _c(hex_int):
+    from pptx.dml.color import RGBColor
+    return RGBColor(hex_int >> 16, (hex_int >> 8) & 0xFF, hex_int & 0xFF)
+
+
+_PPT_THEME = {
+    "primary": lambda: _c(0x1F4E79),  # 深蓝
+    "accent":  lambda: _c(0xE8772E),  # 活力橙
+    "light":   lambda: _c(0xF2F5FA),  # 浅底
+    "white":   lambda: _c(0xFFFFFF),
+    "dark":    lambda: _c(0x333333),
+    "gray":    lambda: _c(0x7F8C8D),
+}
+
+
 def create_pptx(path: str, slides_data: List[Dict]) -> Dict:
     """
-    创建 PowerPoint 文档
-    slides_data: [{"title": "...", "content": "...", "bullets": [...]}]
+    创建 PowerPoint 文档（自带精美主题版式）
+    slides_data: 每项可含：
+      title      主标题
+      subtitle   副标题
+      layout     cover封面 / agenda目录 / content内容(默认) / quote金句 / ending结尾
+      content    导语/说明（一段话）
+      bullets    要点列表；每项可为字符串，或 {"text":..., "level":0|1}
+    无代码时由该函数产出统一美观的设计，保证永远出得了文件。
     """
     try:
         from pptx import Presentation
         from pptx.util import Inches, Pt
         from pptx.dml.color import RGBColor
+        from pptx.enum.text import PP_ALIGN
+        from pptx.enum.shapes import MSO_SHAPE
 
         prs = Presentation()
         # 16:9
         prs.slide_width  = Inches(13.33)
         prs.slide_height = Inches(7.5)
+        SW, SH = 13.33, 7.5
+        T = _PPT_THEME
 
-        for slide_data in slides_data:
-            title_text   = slide_data.get("title", "")
-            content_text = slide_data.get("content", "")
-            bullets      = slide_data.get("bullets", [])
+        def rect(slide, x, y, w, h, color, shape=None):
+            shape = shape or MSO_SHAPE.RECTANGLE
+            shp = slide.shapes.add_shape(shape, Inches(x), Inches(y), Inches(w), Inches(h))
+            shp.fill.solid()
+            shp.fill.fore_color.rgb = color
+            shp.line.fill.background()
+            shp.shadow.inherit = False
+            return shp
 
-            if title_text and (content_text or bullets):
-                layout = prs.slide_layouts[1]  # Title and Content
-            elif title_text:
-                layout = prs.slide_layouts[0]  # Title Slide
+        def box(slide, x, y, w, h):
+            tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+            tb.text_frame.word_wrap = True
+            return tb
+
+        def para(tf, text, size, color, bold=False, align=PP_ALIGN.LEFT,
+                 first=False, italic=False, space_after=6):
+            p = tf.paragraphs[0] if first else tf.add_paragraph()
+            p.alignment = align
+            p.space_after = Pt(space_after)
+            r = p.add_run()
+            r.text = text
+            r.font.size = Pt(size)
+            r.font.bold = bold
+            r.font.italic = italic
+            r.font.color.rgb = color
+            return p
+
+        def wrap_bg(slide, color):
+            rect(slide, 0, 0, SW, SH, color)
+
+        def add_cover(slide, d):
+            wrap_bg(slide, T["light"]())
+            rect(slide, 0, 0, SW, 0.16, T["primary"]())
+            rect(slide, 0.8, 1.7, 0.10, 2.4, T["accent"]())
+            title = d.get("title") or "演示文稿"
+            tf = box(slide, 1.1, 1.7, 11.0, 2.4).text_frame
+            para(tf, title, 44, T["primary"](), bold=True, first=True,
+                 space_after=0)
+            if d.get("subtitle"):
+                tf2 = box(slide, 1.15, 4.1, 10.8, 1.2).text_frame
+                para(tf2, d["subtitle"], 20, T["gray"](), first=True)
+            rect(slide, 1.15, 5.6, 3.0, 0.06, T["accent"]())
+            rect(slide, 1.15, 6.6, 6.0, 0.4, T["primary"]())
+
+        def add_agenda(slide, d):
+            wrap_bg(slide, T["white"]())
+            rect(slide, 0, 0, 0.18, SH, T["accent"]())
+            tf = box(slide, 0.7, 0.6, 11.5, 1.0).text_frame
+            para(tf, d.get("title") or "目录", 30, T["primary"](),
+                 bold=True, first=True)
+            items = d.get("bullets") or d.get("content", "").split("\n")
+            items = [i for i in items if str(i).strip()]
+            tf2 = box(slide, 0.9, 1.9, 11.4, 5.2).text_frame
+            for idx, item in enumerate(items, 1):
+                text = item if isinstance(item, str) else item.get("text", "")
+                r0 = rect(slide, 1.0 + (idx % 2) * 4.6,
+                          1.9 + ((idx - 1) // 2) * 1.1, 0.55, 0.55,
+                          T["primary"]() if idx % 2 else T["accent"]())
+                tfr = box(slide, 1.7 + (idx % 2) * 4.6,
+                          1.9 + ((idx - 1) // 2) * 1.1, 4.0, 0.9)
+                ptxt = tfr.text_frame.paragraphs[0]
+                rn = ptxt.add_run(); rn.text = str(idx).zfill(2)
+                rn.font.size = Pt(18); rn.font.bold = True
+                rn.font.color.rgb = T["white"]()
+                tb2 = box(slide, 2.3 + (idx % 2) * 4.6, 1.9 + ((idx - 1) // 2) * 1.1, 3.4, 0.9).text_frame
+                para(tb2, text, 16, T["dark"](), first=True, space_after=0)
+
+        def add_content(slide, d, index):
+            wrap_bg(slide, T["white"]())
+            rect(slide, 0, 0, SW, 0.12, T["primary"]())
+            title = d.get("title") or f"第 {index} 部分"
+            tf = box(slide, 0.7, 0.55, 11.9, 0.9).text_frame
+            para(tf, title, 28, T["primary"](), bold=True, first=True,
+                 space_after=0)
+            rect(slide, 0.75, 1.45, 2.2, 0.07, T["accent"]())
+            if d.get("content"):
+                tfc = box(slide, 0.75, 1.75, 11.7, 1.0).text_frame
+                para(tfc, d["content"], 16, T["gray"](), first=True,
+                     space_after=0)
+            bullets = d.get("bullets") or []
+            tf2 = box(slide, 0.75, 2.9, 11.7, 4.3).text_frame
+            first = True
+            for b in bullets:
+                if isinstance(b, dict):
+                    text, level = b.get("text", ""), b.get("level", 0)
+                else:
+                    text, level = b, 0
+                p = tf2.paragraphs[0] if first else tf2.add_paragraph()
+                first = False
+                if level == 0:
+                    r0 = p.add_run(); r0.text = "■ "
+                    r0.font.size = Pt(16); r0.font.color.rgb = T["accent"]()
+                    r1 = p.add_run(); r1.text = text
+                    r1.font.size = Pt(16); r1.font.color.rgb = T["dark"]()
+                    p.space_before = Pt(8); p.space_after = Pt(4)
+                else:
+                    rl = p.add_run(); rl.text = "    – " + text
+                    rl.font.size = Pt(14); rl.font.color.rgb = T["gray"]()
+                    p.space_before = Pt(2); p.space_after = Pt(2)
+
+        def add_quote(slide, d):
+            wrap_bg(slide, T["light"]())
+            rect(slide, 0, 0, SW, 0.16, T["accent"]())
+            q = d.get("content") or d.get("title") or ""
+            tf = box(slide, 1.5, 2.4, 10.3, 2.6).text_frame
+            para(tf, "“" + q + "”", 26, T["primary"](), first=True,
+                 align=PP_ALIGN.CENTER, italic=True, space_after=18)
+            tf2 = box(slide, 1.5, 5.0, 10.3, 0.8).text_frame
+            para(tf2, "— " + (d.get("subtitle") or "金句"), 18, T["accent"](),
+                 first=True, align=PP_ALIGN.CENTER)
+
+        def add_ending(slide, d):
+            wrap_bg(slide, T["primary"]())
+            rect(slide, 1.0, 1.0, 0.12, 5.5, T["accent"]())
+            tf = box(slide, 1.6, 2.6, 10.5, 1.6).text_frame
+            para(tf, d.get("title") or "谢谢观看", 44, T["white"](),
+                 bold=True, first=True, align=PP_ALIGN.CENTER, space_after=0)
+            if d.get("subtitle"):
+                tf2 = box(slide, 1.6, 4.2, 10.5, 1.0).text_frame
+                para(tf2, d["subtitle"], 20, T["light"](), first=True,
+                     align=PP_ALIGN.CENTER)
+
+        for index, slide_data in enumerate(slides_data, 1):
+            std = dict(t for t in slide_data.items()) if isinstance(slide_data, dict) else {}
+            layout = str(std.get("layout", "content")).lower()
+
+            if layout == "cover":
+                slide = prs.slides.add_slide(prs.slide_layouts[6])
+                add_cover(slide, std)
+            elif layout == "agenda":
+                slide = prs.slides.add_slide(prs.slide_layouts[6])
+                add_agenda(slide, std)
+            elif layout == "quote":
+                slide = prs.slides.add_slide(prs.slide_layouts[6])
+                add_quote(slide, std)
+            elif layout == "ending":
+                slide = prs.slides.add_slide(prs.slide_layouts[6])
+                add_ending(slide, std)
             else:
-                layout = prs.slide_layouts[6]  # Blank
-
-            slide = prs.slides.add_slide(layout)
-
-            # 标题
-            if slide.shapes.title and title_text:
-                slide.shapes.title.text = title_text
-                tf = slide.shapes.title.text_frame
-                tf.paragraphs[0].runs[0].font.bold = True
-                tf.paragraphs[0].runs[0].font.size = Pt(32)
-
-            # 内容
-            body_texts = []
-            if content_text:
-                body_texts.append(content_text)
-            body_texts.extend(bullets)
-
-            if body_texts and len(slide.placeholders) > 1:
-                tf = slide.placeholders[1].text_frame
-                tf.clear()
-                for i, bt in enumerate(body_texts):
-                    if i == 0:
-                        p = tf.paragraphs[0]
-                    else:
-                        p = tf.add_paragraph()
-                    p.text = bt
-                    p.font.size = Pt(18)
+                slide = prs.slides.add_slide(prs.slide_layouts[6])
+                add_content(slide, std, index)
 
         path = _resolve_output_path(path)
         prs.save(path)
@@ -372,6 +502,80 @@ def create_pptx(path: str, slides_data: List[Dict]) -> Dict:
         return {"ok": False, "error": "需要安装 python-pptx：pip install python-pptx"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# 代码执行通道：不允许的危险操作
+_PPT_CODE_BLOCKED = (
+    "os.", "subprocess", "sys.", "open(", "__import__", "eval(", "exec(",
+    "socket", "shutil", "popen", "system(", "remove(", "unlink", "write_text",
+    "tempfile", "glob", "pathlib", "import shutil", "import os", "requests",
+)
+
+
+def create_ppt_from_code(path: str, code: str) -> Dict:
+    """
+    直接执行 AI 生成的 python-pptx 代码，产出完全自定义版式的 PPT。
+    code 内应 `from pptx import Presentation` 自行布局，最后调用
+    `prs.save(PATH)`（PATH 已作为变量注入作用域）。
+    通过受限子进程执行，并对代码内明显危险操作做静态拦截。
+    """
+    import subprocess, sys, tempfile, textwrap
+
+    low = code.lower()
+    for key in _PPT_CODE_BLOCKED:
+        if key in low:
+            stripped = low.replace(" ", "").replace("\t", "")
+            if key in stripped:
+                return {"ok": False, "error": f"代码包含被禁止的操作：{key}"}
+
+    path = _resolve_output_path(path)
+    if "prs.save(" not in code:
+        return {"ok": False, "error": "代码中缺少 prs.save(PATH) 保存语句"}
+
+    pycode = textwrap.dedent(f"""\
+        # -*- coding: utf-8 -*-
+        import os as _os
+        PATH = {path!r}
+        path = PATH
+        try:
+    """) + "\n".join("    " + l for l in code.splitlines()) + "\n"
+    pycode += textwrap.dedent("""\
+            if not _os.path.exists(PATH):
+                raise RuntimeError('代码未生成文件')
+        except Exception as _e:
+            import sys as _sys
+            _sys.stderr.write(str(_e))
+            _sys.exit(1)
+    """)
+
+    fd, tmp = tempfile.mkstemp(suffix=".py")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(pycode)
+        proc = subprocess.run(
+            [sys.executable, tmp],
+            capture_output=True, text=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "代码执行超时（>120s）"}
+    except Exception as e:
+        return {"ok": False, "error": f"运行失败：{e}"}
+    finally:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+
+    if proc.returncode != 0:
+        return {"ok": False, "error": f"代码执行失败：{proc.stderr.strip()[:500]}"}
+    if not os.path.exists(path):
+        return {"ok": False, "error": "未生成文件，请确认代码中调用了 prs.save(PATH)"}
+    try:
+        from pptx import Presentation
+        slide_count = len(Presentation(path).slides)
+    except Exception:
+        slide_count = 0
+    return {"ok": True, "path": path, "type": "pptx", "slide_count": slide_count}
 
 
 def create_pdf(path: str, content: str, title: str = "") -> Dict:

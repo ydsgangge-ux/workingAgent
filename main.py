@@ -26,6 +26,22 @@ def _default_font():
     else:
         return "Noto Sans CJK SC"
 
+
+def _install_quiet_font_handler():
+    """过滤 Qt 无害的字体告警：'QFont::setPointSize: Point size <= 0 (-1)'
+    这是 Qt 内部把未指定(-1)字号套到控件时的框架级日志，纯噪音、无功能影响。
+    仅吞这一条，其它 Qt 消息照常原样输出。须在 setFont/setStyleSheet 之前安装。"""
+    from PyQt6.QtCore import qInstallMessageHandler
+
+    def _handler(msg_type, context, message):
+        # 非目标消息原样转发回 stderr，避免吞掉真正的错误
+        if "QFont::setPointSize: Point size <= 0" not in message:
+            import sys
+            print(message, file=sys.stderr)
+
+    qInstallMessageHandler(_handler)
+
+
 # 导入核心 Qt 模块（这里报错说明 PyQt6 没有安装）
 try:
     from PyQt6.QtCore    import Qt, QObject, QThread, pyqtSignal, QTimer
@@ -329,6 +345,7 @@ class AGIApp:
 
     def __init__(self):
         self.app = QApplication(sys.argv)
+        _install_quiet_font_handler()   # 先压掉 QFont setPointSize(-1) 噪音
         self.app.setApplicationName(APP_NAME)
         self.app.setApplicationVersion(APP_VERSION)
         self.app.setQuitOnLastWindowClosed(False)
@@ -402,6 +419,18 @@ class AGIApp:
         self.agent = agent
         self.main_win.agent = agent
         self.float_win.agent = agent
+
+        # 启动飞书机器人（长连接，后台线程）
+        if not getattr(self, "_lark_started", False):
+            self._lark_started = True
+            try:
+                from lark_bot import LarkBot
+                threading.Thread(target=LarkBot(agent).start, daemon=True).start()
+                print("[LarkBot] 飞书机器人已在后台启动")
+            except ImportError:
+                print("[LarkBot] lark-oapi 未安装，运行: pip install lark-oapi>=1.6.5")
+            except Exception as e:
+                print(f"[LarkBot] 启动失败（{e}），飞书不可用")
 
         if hasattr(agent, 'bridge') and agent.bridge:
             agent.bridge._agent_callback = agent.process
