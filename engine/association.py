@@ -153,17 +153,65 @@ class MemoryAssociationNetwork:
         self.link(id_a, id_b, assoc_type, strength, shared_elements)
         self.link(id_b, id_a, assoc_type, strength, shared_elements)
 
+    # ── 归一化 / 相似度（把"我妈/妈妈/Mama"归成一个实体，连得上边）──
+    # 说明：项目当前向量模式是 hash，对不同词的余弦相似度无语义意义，
+    #       因此这里用「归一化 + 别名 + 字符串相似度」实现标签相似建边。
+
+    _ALIAS = [   # 有序：长词优先；避免 dst 含其他 src(如"妈妈"含"妈")导致级联替换
+        ("我妈", "妈妈"), ("老妈", "妈妈"), ("妈妈", "妈妈"),
+        ("mama", "妈妈"), ("mom", "妈妈"), ("mother", "妈妈"),
+        ("我爸", "爸爸"), ("老爸", "爸爸"), ("爸爸", "爸爸"),
+        ("dad", "爸爸"), ("father", "爸爸"),
+        ("小孩", "孩子"), ("孩子", "孩子"),
+    ]
+
+    @staticmethod
+    def normalize(name: str) -> str:
+        """归一化：去空白/全角转半角/小写/别名统一，让同实体的不同写法撞上。"""
+        if not name:
+            return ""
+        s = str(name).strip().replace(" ", "").replace("　", "")
+        # 全角 → 半角
+        s = "".join(
+            chr(ord(c) - 0xFEE0) if 0xFF01 <= ord(c) <= 0xFF5E else c for c in s
+        )
+        s = s.lower()
+        for src, dst in MemoryAssociationNetwork._ALIAS:
+            if src and src in s:
+                s = s.replace(src, dst)
+        return s.strip()
+
+    @staticmethod
+    def similarity(a: str, b: str) -> float:
+        """字符串相似度 0~1（difflib 序列匹配，标准库，中文按字符）。"""
+        if not a or not b:
+            return 0.0
+        import difflib
+        return difflib.SequenceMatcher(None, a, b).ratio()
+
+    def _sim_threshold(self) -> float:
+        """相似度建边阈值（可配 edge_sim_threshold，默认 0.8）"""
+        try:
+            from desktop.config import load_config
+            return float(load_config().get("edge_sim_threshold", 0.8))
+        except Exception:
+            return 0.8
+
     def register_entity(
         self,
         name: str,
-        entity_type: str,   # person / place / object / sensation
+        entity_type: str,   # person / place / object / sensation / time
         memory_id: str
     ):
         """
-        注册实体（人物/地点/感官元素）并关联到记忆
-        同一实体出现在多条记忆中，自动建立关联
+        注册实体（人物/地点/感官元素）并关联到记忆。
+        建边规则：
+          1) 归一化后同名(我妈/妈妈/Mama)→同一实体 → 自动 0.75 强边
+          2) 归一化后不同名，但字符串相似度 ≥ edge_sim_threshold(默认0.8)
+             → 可视为同一标签的不同写法 → 也建 0.8 边，并并入该实体
         """
-        entity_id = f"{entity_type}:{name}"
+        norm = self.normalize(name) or str(name).strip()
+        entity_id = f"{entity_type}:{norm}"
 
         with guarded_connect(self.db_path) as conn:
             row = conn.execute(
@@ -174,14 +222,11 @@ class MemoryAssociationNetwork:
             if row:
                 existing_ids = json.loads(row[0])
                 if memory_id not in existing_ids:
-                    # 与已有记忆建立关联
+                    atype = self._entity_type_to_assoc(entity_type)
                     for existing_id in existing_ids:
-                        atype = self._entity_type_to_assoc(entity_type)
-                        # 强度：同一重要实体，关联强
                         self.link_bidirectional(
                             memory_id, existing_id, atype,
-                            strength=0.75,
-                            shared_elements=[name]
+                            strength=0.75, shared_elements=[name]
                         )
                     existing_ids.append(memory_id)
                     conn.execute(
@@ -189,10 +234,41 @@ class MemoryAssociationNetwork:
                         (json.dumps(existing_ids), entity_id)
                     )
             else:
-                conn.execute(
-                    "INSERT INTO memory_entities VALUES (?,?,?,?)",
-                    (entity_id, name, entity_type, json.dumps([memory_id]))
-                )
+                # 归一化后无同名实体 → 在存量实体里找"相似标签"，相似则连边
+                threshold = self._sim_threshold()
+                best = None  # (entity_id, similarity, existing_ids)
+                for (eid, ename, emids) in conn.execute(
+                    "SELECT entity_id, name, memory_ids FROM memory_entities"
+                ).fetchall():
+                    # 只跟同类型或语义类型比，避免跨类误连（time 不跟 place 连）
+                    etype = eid.split(":", 1)[0] if ":" in eid else ""
+                    if etype and etype != entity_type:
+                        continue
+                    sim = self.similarity(norm, MemoryAssociationNetwork.normalize(ename))
+                    if sim >= threshold and (best is None or sim > best[1]):
+                        best = (eid, sim, json.loads(emids or "[]"))
+
+                if best:
+                    _, sim, eids = best
+                    atype = self._entity_type_to_assoc(entity_type)
+                    for existing_id in eids:
+                        if existing_id != memory_id:
+                            self.link_bidirectional(
+                                memory_id, existing_id, atype,
+                                strength=min(0.85, 0.5 + sim),
+                                shared_elements=[name, ename]
+                            )
+                    # 并入最相似实体的记忆列表，后续再出现继续连
+                    eids.append(memory_id)
+                    conn.execute(
+                        "UPDATE memory_entities SET memory_ids=? WHERE entity_id=?",
+                        (json.dumps(eids), best[0])
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO memory_entities VALUES (?,?,?,?)",
+                        (entity_id, norm, entity_type, json.dumps([memory_id]))
+                    )
             conn.commit()
 
     # ── 涟漪扩散检索 ─────────────────────────────────

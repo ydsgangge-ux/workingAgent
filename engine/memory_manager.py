@@ -189,8 +189,8 @@ class HierarchicalMemoryManager:
         )
         stored_ids["summary"] = self.store.add(n, user_id=user_id)
 
-        # 关联网络
-        if self.net and tags:
+        # 关联网络：只有 importance ≥ 0.5 的记忆才进网建边（低分不当关联节点）
+        if self.net and tags and importance >= 0.5:
             from engine.association import AssociationAnalyzer
             primary_id = (stored_ids.get("detail")
                           or stored_ids.get("outline")

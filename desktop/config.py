@@ -78,6 +78,7 @@ DEFAULT_CONFIG = {
     "assoc_enable":       True,   # 联想总开关：false 则恢复纯原检索
     "assoc_temp":         0.15,   # 联想温度：越小越精/越少，越大越多但杂
     "assoc_k":            3,      # 每次最多联想条数（封顶，防命中率爆炸）
+    "edge_sim_threshold": 0.8,    # 标签相似度建边阈值：≥此值两个标签视为同一实体并连边
 }
 
 
