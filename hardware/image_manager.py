@@ -133,12 +133,16 @@ class ImageManager:
                 if w > 1920 or h > 1080:
                     scale = min(1920 / w, 1080 / h)
                     img = cv2.resize(img, None, fx=scale, fy=scale)
-                cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
-                return
+                # 用 cv2.imencode 压进内存再写盘：绕开 OpenCV 在 Windows 上
+                # 对含中文路径 "静默写失败"(imwrite 返回 False 不抛异常) 的坑
+                ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+                if ok:
+                    path.write_bytes(buf.tobytes())
+                    return
         except ImportError:
             pass
 
-        # OpenCV 不可用时直接保存原始字节
+        # OpenCV 不可用或压缩/落盘失败时，直接保存原始字节
         path.write_bytes(img_bytes)
 
     # ── 存图判断 ──────────────────────────────────────
