@@ -631,6 +631,34 @@ class ConsciousnessAgent:
 
             # ── 工具结果：若收尾汇总失败(API调用失败)，回退到已成功步骤的真实结果 ──
             res_txt = self._exec_safe_result(exec_result, tool_steps)
+
+            # ── 软上限·全自动续跑：中间有进展但没搞完 → 自动追加预算继续，不浪费战果 ──
+            _AUTO_CONTINUE_BUDGET = 2
+            _cont_rounds = 0
+            while (
+                not exec_result.get("success")
+                and exec_result.get("exhausted")
+                and tool_steps
+                and res_txt and not res_txt.startswith("API调用失败")
+                and _cont_rounds < _AUTO_CONTINUE_BUDGET
+            ):
+                _cont_rounds += 1
+                self._log("续跑", f"前方步骤未达目标且有进展，自动续跑第 {_cont_rounds}/{_AUTO_CONTINUE_BUDGET} 轮")
+                _cont_task = (
+                    f"任务尚未完成，请基于已有进展继续执行，尽快产出最终交付物。\n"
+                    f"【原始目标】{tool_task}\n"
+                    f"【已完成动作与中间结果】\n{self._mid_steps_summary(tool_steps)}\n"
+                    f"【续跑要求】不要再从头重复搜索；直接抓取已定位的官方/一手数据源补齐缺失信息，尽早完成最终产出。"
+                )
+                exec_result = self.b.execute_task(
+                    task=_cont_task, context=context, use_tools=True,
+                    max_tokens=_max_tokens, user_input=user_input,
+                    only_tools=([forced_tool] if forced_tool else None),
+                )
+                tool_steps  = tool_steps + exec_result.get("steps", [])
+                tools_used  = tools_used + exec_result.get("tools_used", [])
+                res_txt = self._exec_safe_result(exec_result, tool_steps)
+
             if not exec_result.get("success"):
                 tool_result_section = (
                     f"\n⚠️ 你的助手刚帮你执行了一个操作，但遇到了问题。"
@@ -677,6 +705,7 @@ class ConsciousnessAgent:
                 _IMG_TYPES = ("png", "jpg", "jpeg", "webp", "gif", "image")
 
                 def _publish(src, kind):
+                    nonlocal tool_result_section
                     src = _Path(str(src))
                     if not src.exists():
                         return
@@ -714,6 +743,79 @@ class ConsciousnessAgent:
                             _publish(img, "img")
             except Exception as _fe:
                 self._log("图/文件", f"交付失败: {_fe}")
+
+            # ── PPT/PDF 交付前视觉自检（仅当配置了多模态模型；失败一律静默）───────────
+            try:
+                from pathlib import Path as _P2
+                try:
+                    import fitz as _fitz
+                except Exception:
+                    _fitz = None
+                try:
+                    from engine.vision_client import create_vision_client as _mkvision
+                    _vision = _mkvision()
+                except Exception:
+                    _vision = None
+                if _vision is not None:
+                    _checked_artifacts = set()
+                    _checked_previews  = set()
+                    for _step in tool_steps:
+                        _sr = _step.get("result", {}) if isinstance(_step, dict) else {}
+                        if not isinstance(_sr, dict):
+                            continue
+                        _fp = _sr.get("path", "")
+                        _ft = (_sr.get("type", "") or "").lower()
+                        if not _fp or _ft not in ("pptx", "pdf") or _fp in _checked_artifacts:
+                            continue
+                        _checked_artifacts.add(_fp)
+                        _preview = None
+                        _new_preview = False
+                        if _ft == "pdf":
+                            try:
+                                from engine.pdf_annotate import annotate_pdf as _apdf
+                                _pdir = download_dir / ("_visual_" + _P2(_fp).stem)
+                                _pdir.mkdir(parents=True, exist_ok=True)
+                                _rr = _apdf(_fp, str(_pdir), marks=None, page_nums=[1])
+                                if _rr.get("ok") and _rr.get("images"):
+                                    _preview = _rr["images"][0]
+                                    _new_preview = True
+                            except Exception:
+                                _preview = None
+                        else:  # pptx：优先复用工具已生成的预览图（若有）
+                            for _s2 in tool_steps:
+                                _r2 = _s2.get("result", {}) if isinstance(_s2, dict) else {}
+                                if not isinstance(_r2, dict):
+                                    continue
+                                for _im in (_r2.get("images") or []):
+                                    _pim = _im.get("path", "") if isinstance(_im, dict) else str(_im)
+                                    if _pim and _pim not in _checked_previews:
+                                        _preview = _pim
+                                        break
+                                if _preview:
+                                    break
+                        if not _preview or _preview in _checked_previews:
+                            continue
+                        _checked_previews.add(_preview)
+                        try:
+                            _vc = _vision.analyze(
+                                _preview,
+                                "这是待交付文档的预览图。请检查版式：文字是否溢出边界/被裁切、元素是否重叠、是否有大片空白异常。"
+                                "如发现问题，指出具体位置；如无问题，回复'无问题'。"
+                            )
+                            _txt = _vc if isinstance(_vc, str) else (
+                                _vc.get("text") or _vc.get("description")
+                                or _vc.get("content") or str(_vc)
+                            )
+                            _txt = str(_txt).strip()[:400]
+                            _short = _txt if len(_txt) < 80 else _txt[:77] + "..."
+                            if _new_preview:
+                                tool_result_section += f"\n[image:{_P2(_preview).name}:{_P2(_preview).name}]"
+                            tool_result_section += f"\n🔍 交付物版式自检：{_short}"
+                            self._log("视觉自检", _short)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
         # ⑤ 生成回应（带完整对话历史）
         try:
@@ -972,6 +1074,20 @@ class ConsciousnessAgent:
                     )
         return raw
 
+    def _mid_steps_summary(self, steps: list) -> str:
+        """把已执行的工具步骤压成一段紧凑摘要，供自动续跑时告知 B 层已有进展。"""
+        lines = []
+        for s in steps[-6:]:
+            if not isinstance(s, dict):
+                continue
+            r = s.get("result") or {}
+            if not isinstance(r, dict):
+                continue
+            ok = "✓" if r.get("ok") else "✗"
+            detail = str(r)[:220]
+            lines.append(f"[步骤{s.get('step')}] {s.get('tool')} {ok} {detail}")
+        return "\n".join(lines) if lines else "(无)"
+
     def _detect_named_tool(self, text: str) -> Optional[str]:
         """
         检测用户是否点名了某个具体工具（如 "用 browser_action"、"调用 create_ppt"）。
@@ -1002,7 +1118,7 @@ class ConsciousnessAgent:
         if not self._get_config("tag_enable", True):
             return {"tags": [], "entities": {}}
         tag_max = int(self._get_config("tag_max", 6))
-        tag_max_len = int(self._get_config("tag_max_len", 6))
+        tag_max_len = int(self._get_config("tag_max_len", 12))
         try:
             prompt = (
                 "从下面的对话内容中提取具体且可复现的实体作为联想标签。\n"
@@ -1017,7 +1133,7 @@ class ConsciousnessAgent:
                 " \"person|place|time|relation\"}]}\n\n"
                 f"对话内容：\n{content}\n\n{raw_conversation or ''}"
             )
-            raw = self.b.generate(prompt, max_tokens=20,
+            raw = self.b.generate(prompt, max_tokens=2000,
                                   temperature=0.3, thinking=False)
             parsed = self._parse_json(raw, {"entities": []})
             entities: Dict[str, List[str]] = {}

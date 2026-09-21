@@ -55,6 +55,20 @@ def _get_desktop() -> Path:
     return Path.home()
 
 
+def _ai_scratch_dir() -> Path:
+    """AI 的草稿/笔记工作区（项目内 ai_notes/）。
+
+    替代桌面作为 write_file 等草稿系工具的默认落盘点，避免 AI 乱写文件污染用户桌面。
+    正式产物（PPT/PDF/Word）仍走 downloads/ 交付，不受影响。
+    """
+    d = _get_app_dir() / "ai_notes"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
 # ═══════════════════════════════════════════════════
 # 工具注册表
 # ═══════════════════════════════════════════════════
@@ -238,10 +252,10 @@ def search_in_file(path: str, keyword: str, encoding: str = "utf-8",
 
 @register_tool(
     name="write_file",
-    description="写入内容到文件。路径不填则默认保存到桌面。支持相对路径和绝对路径",
+    description="写入内容到文件。路径不填则默认保存到 AI 草稿工作区（项目内 ai_notes/），不会污染桌面。支持相对路径和绝对路径",
     parameters={
         "path": {"type": "string",
-                 "description": "目标文件路径。可以是文件名（自动保存到桌面）、相对路径或绝对路径",
+                 "description": "目标文件路径。可以是文件名（自动保存到 AI 草稿工作区 ai_notes/）、相对路径或绝对路径",
                  "required": True},
         "content": {"type": "string", "description": "要写入的内容", "required": True},
         "append": {"type": "boolean", "description": "是否追加（而非覆盖），默认 false"}
@@ -251,10 +265,10 @@ def search_in_file(path: str, keyword: str, encoding: str = "utf-8",
 def write_file(path: str, content: str, append: bool = False) -> Dict:
     try:
         path = path.strip()
-        # 如果只是文件名（没有路径分隔符），自动放到桌面
+        # 只给文件名（没有路径分隔符）时，默认落到 AI 草稿工作区（项目内 ai_notes/）
         if not any(c in path for c in ["/", "\\", ":"]):
-            desktop = _get_desktop()
-            path = str(desktop / path)
+            scratch = _ai_scratch_dir()
+            path = str(scratch / path)
         path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
@@ -534,17 +548,77 @@ def run_python(code: str, cwd: str = None) -> Dict:
 # 网络工具
 # ═══════════════════════════════════════════════════
 
+# 判定是否为官网/官方文档域名的启发式（用于搜索时优先呈现一手数据源）
+_OFFICIAL_HOST_HINTS = ("docs.", "documentation.", "api.", "developer.",
+                        "developers.", "support.", "help.", "portal.", "cloud.")
+_OFFICIAL_TLDS = (".gov", ".edu", ".gouv", ".mil")
+# 常见内容平台/聚合站/评测站（短域名但并非一手官方源），命中则不判官网
+_OFFICIAL_BLOCK_SUFFIXES = (
+    "zhihu.com", "csdn.net", "cnblogs.com", "jianshu.com", "juejin.cn",
+    "infoq.cn", "51cto.com", "sohu.com", "163.com", "qq.com", "weibo.com",
+    "baidu.com", "bing.com", "google.com", "reddit.com", "medium.com",
+    "ai-bot.cn", "36kr.com", "tianyancha.com", "qcc.com", "runoob.com",
+)
+
+
+def _is_official_host(url: str) -> bool:
+    """粗略判断某条搜索结果是否来自官网/官方文档域名。
+
+    命中 docs.* / 官方 TLD / 维基百科 / 权威域名，或短域名(≤2段)且非内容平台黑名单，
+    视为官方一手来源。
+    """
+    try:
+        import urllib.parse
+        host = urllib.parse.urlparse(url).netloc.lower()
+        host = host[4:] if host.startswith("www.") else host
+        if not host:
+            return False
+        if host.endswith(_OFFICIAL_TLDS):
+            return True
+        if host in ("wikipedia.org", "en.wikipedia.org", "zh.wikipedia.org"):
+            return True
+        if any(h in host for h in _OFFICIAL_HOST_HINTS):
+            return True
+        if host.endswith(_OFFICIAL_BLOCK_SUFFIXES):
+            return False
+        # 短域名（段数 ≤ 2，如 example.cn / example.com）通常就是官网/一手数据源
+        return len(host.split(".")) <= 2
+    except Exception:
+        return False
+
+
 @register_tool(
     name="web_search",
-    description="搜索网络信息。优先使用 DuckDuckGo，失败时自动切换到 Bing 搜索",
+    description=(
+        "搜索网络信息（DuckDuckGo 备用 Bing）。结果会被优先排序并标注官网/官方文档(如 docs.* / *.cn / 权威域名)。"
+        "命中官网或官方数据源后，请立即用 fetch_url / browser_action 抓取该页一手数据，不要再反复盲搜。"
+        "exact=true 时用精确短语(bing引号)重搜，常用于官网列名、型号名等需要精确匹配的场景。"
+    ),
     parameters={
         "query": {"type": "string", "description": "搜索关键词", "required": True},
-        "max_results": {"type": "integer", "description": "最大结果数，默认 5"}
+        "max_results": {"type": "integer", "description": "最大结果数，默认 5"},
+        "exact": {"type": "boolean", "description": "是否用精确短语重搜（默认 false）；官网型号名/列名用 true"}
     },
     risk="low"
 )
-def web_search(query: str, max_results: int = 5) -> Dict:
-    """搜索网络，多引擎备用"""
+def web_search(query: str, max_results: int = 5, exact: bool = False) -> Dict:
+    """搜索网络，多引擎备用；官网/官方域名结果优先并标注。"""
+
+    def _finalize(results, engine):
+        """给定解析结果，官网/官方域名排前并标注 official，附带抓取建议。"""
+        if not results:
+            return {"ok": True, "engine": engine, "query": query,
+                    "results": [],
+                    "note": "未解析到结果，建议改用精确短语(exact=true)或用 fetch_url 直接访问已知地址"}
+        for r in results:
+            r["official"] = _is_official_host(r.get("url", ""))
+            r.setdefault("snippet", "")
+        # 官网/官方域名排前，其余保持原始顺序（用序号做稳定排序键）
+        ranked = sorted(enumerate(results), key=lambda t: (not t[1]["official"], t[0]))
+        results = [r for _, r in ranked]
+        return {"ok": True, "engine": engine, "query": query,
+                "results": results[:max_results],
+                "note": "命中官网/官方数据源时请用 fetch_url / browser_action 抓一手数据，避免仅依赖摘要"}
 
     # ── 方式1：DuckDuckGo Instant Answer API ──
     try:
@@ -571,15 +645,15 @@ def web_search(query: str, max_results: int = 5) -> Dict:
                     "url":     topic.get("FirstURL", "")
                 })
         if results:
-            return {"ok": True, "engine": "DuckDuckGo",
-                    "query": query, "results": results[:max_results]}
+            return _finalize(results[:max_results], "DuckDuckGo")
     except Exception:
         pass   # 静默失败，尝试备用
 
-    # ── 方式2：Bing 搜索（抓取结果页）──────────
+    # ── 方式2：Bing 搜索（抓取结果页）；exact=true 时用引号做精确短语 ──
     try:
         import re
-        encoded = urllib.parse.quote(query)
+        q = query if not exact else f'"{query.strip(chr(34))}"'
+        encoded = urllib.parse.quote(q)
         url = f"https://www.bing.com/search?q={encoded}&count={max_results}"
         req = urllib.request.Request(
             url,
@@ -593,9 +667,7 @@ def web_search(query: str, max_results: int = 5) -> Dict:
         with urllib.request.urlopen(req, timeout=12) as resp:
             html = resp.read().decode("utf-8", errors="replace")
 
-        # 提取搜索结果
         results = []
-        # 匹配 Bing 结果标题和链接
         titles   = re.findall(r'<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', html)
         snippets = re.findall(r'<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>(.*?)</p>', html)
 
@@ -608,13 +680,7 @@ def web_search(query: str, max_results: int = 5) -> Dict:
                     "snippet": snippet_clean[:300],
                     "url":     href
                 })
-
-        if results:
-            return {"ok": True, "engine": "Bing",
-                    "query": query, "results": results}
-        else:
-            return {"ok": True, "engine": "Bing", "query": query,
-                    "results": [], "note": "未解析到结果，建议用 fetch_url 直接访问"}
+        return _finalize(results, "Bing")
 
     except Exception as e:
         return {"ok": False,
