@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 
 from desktop.config import APP_NAME, load_config, save_config, get_qss
 from desktop.system import make_tray_icon
+from engine.multiseg import multiseg   # 多段输入缓冲（共享单例）
 
 
 def _get_desktop() -> Path:
@@ -6129,6 +6130,17 @@ class MainWindow(QMainWindow):
         )
 
     def _on_message(self, text: str):
+        # 多段输入：正在处理则排队串行（替换原先"静默丢弃"）
+        if not multiseg.claim("default"):
+            multiseg.pend("default", text)
+            return
+        self._process_main_message(text)
+
+    def _drain_main_pending(self):
+        for p in multiseg.release("default"):
+            QTimer.singleShot(0, lambda p=p: self._on_message(p))
+
+    def _process_main_message(self, text: str):
         if self._worker and self._worker.isRunning():
             return
 
@@ -6244,6 +6256,7 @@ class MainWindow(QMainWindow):
                     pass
         self._status_mode.setText("就绪")
         self._update_memory_count()
+        self._drain_main_pending()
 
         # TTS 自动朗读
         try:
@@ -6261,6 +6274,7 @@ class MainWindow(QMainWindow):
         self.chat_page.remove_thinking_indicator()
         self.chat_page.add_ai_message(f"❌ 错误: {err}")
         self._status_mode.setText("就绪")
+        self._drain_main_pending()
         # VRM: 错误时恢复 idle
         vrm = getattr(self.chat_page, "vrm_widget", None)
         if vrm:

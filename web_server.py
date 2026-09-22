@@ -12,9 +12,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-
 from flask import Flask, request, session, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
+
+from engine.multiseg import multiseg
+
+_multiseg = multiseg   # 共享单例（桌面/飞书等入口同队列）
+
 
 # ── 全局共享实例（由 start_web_chat 注入）─────────────────
 _agent = None
@@ -397,50 +401,74 @@ def on_chat_message(data):
 
     emit("chat:typing", {"chat_id": chat_id})
 
+    from pathlib import Path as _Path
+
+    def _with_img_markers(result):
+        """把工具生成的图片链接拼进 response，保留 [img:...] 标记（合并不切坏）"""
+        r = result if isinstance(result, dict) else {}
+        text = r.get("response", "") or str(result)
+        for step in (r.get("tool_steps", []) or []):
+            sr = step.get("result", {})
+            if isinstance(sr, dict) and sr.get("image_path"):
+                text += f"\n[img:/api/images/{_Path(sr['image_path']).name}]"
+        r["response"] = text
+        return r
+
+    def _persist_turn(result):
+        """持久化一轮助手回复到 chat（历史保持各轮自然）"""
+        r = _with_img_markers(result)
+        ai_msg = {
+            "role": "assistant",
+            "content": r.get("response", ""),
+            "timestamp": datetime.now().isoformat(),
+            "tool_steps": r.get("tool_steps", []),
+            "tools_used": r.get("tools_used", []),
+            "emotion": r.get("emotion", {}),
+        }
+        chat["messages"].append(ai_msg)
+        return ai_msg
+
+    def _emit_final(result):
+        """合并结果只发一次；覆盖最后一条为合并文本，避免重复气泡"""
+        r = _with_img_markers(result)
+        if chat["messages"] and chat["messages"][-1].get("role") == "assistant":
+            chat["messages"][-1]["content"] = r.get("response", "")
+            chat["messages"][-1]["tool_steps"] = r.get("tool_steps", [])
+            chat["messages"][-1]["emotion"] = r.get("emotion", {})
+            ai_msg = chat["messages"][-1]
+        else:
+            ai_msg = _persist_turn(result)
+        chat["updated_at"] = datetime.now().isoformat()
+        _save_chats(user_id, chats)
+        emit("chat:reply", {"chat_id": chat_id, "message": ai_msg})
+        if not data.get("chat_id"):
+            emit("chat:created", {"chat_id": chat_id, "title": chat["title"]})
+
     try:
-        result = _agent.process(message)
-        reply = result.get("response", str(result))
-        tool_steps = result.get("tool_steps", [])
-        tools_used = result.get("tools_used", [])
-        emotion = result.get("emotion", {})
-
-        # 检查工具调用结果中是否有生成的图片
-        from pathlib import Path as _Path
-        for step in tool_steps:
-            step_result = step.get("result", {})
-            if isinstance(step_result, dict) and step_result.get("image_path"):
-                img_path = step_result["image_path"]
-                filename = _Path(img_path).name
-                reply += f"\n[img:/api/images/{filename}]"
+        _multiseg.route(
+            _agent,
+            user_id,
+            message,
+            process_fn=lambda m: _agent.process(m),
+            emit_fn=_emit_final,
+            on_each=_persist_turn,
+        )
     except Exception as e:
-        reply = f"引擎错误：{e}"
-        tool_steps = []
-        tools_used = []
-        emotion = {}
-
-    ai_msg = {
-        "role": "assistant",
-        "content": reply,
-        "timestamp": datetime.now().isoformat(),
-        "tool_steps": tool_steps,
-        "tools_used": tools_used,
-        "emotion": emotion,
-    }
-    chat["messages"].append(ai_msg)
-    chat["updated_at"] = datetime.now().isoformat()
-
-    _save_chats(user_id, chats)
-
-    emit("chat:reply", {
-        "chat_id": chat_id,
-        "message": ai_msg,
-    })
-
-    if not data.get("chat_id"):
-        emit("chat:created", {
-            "chat_id": chat_id,
-            "title": chat["title"],
-        })
+        # 整段失败（连一问都没算出）→ 兜底交付错误提示
+        ai_msg = {
+            "role": "assistant",
+            "content": f"引擎错误：{e}",
+            "timestamp": datetime.now().isoformat(),
+            "tool_steps": [],
+            "tools_used": [],
+            "emotion": {},
+        }
+        chat["messages"].append(ai_msg)
+        chat["updated_at"] = datetime.now().isoformat()
+        _save_chats(user_id, chats)
+        emit("chat:reply", {"chat_id": chat_id, "message": ai_msg})
+        if not data.get("chat_id"):
+            emit("chat:created", {"chat_id": chat_id, "title": chat["title"]})
 
 
 @socketio.on("chat:stop")

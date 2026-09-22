@@ -98,7 +98,7 @@ REASONING_PROMPT = """你是{name}，一个有完整人格和记忆的意识主�
 {time_gap}
 
 【当前对话】
-当前时间：{current_time}
+当前时间：{current_time}（这是此刻的真实时间，必须据此描述当下场景，如白天/黑夜、光线、作息；禁止把记忆里过去某个时段——如深夜聊天——当作现在正在发生）
 {current_user_name}：{user_input}
 任务类型：{task_type}
 你的初步感受：{emotion_desc}
@@ -152,7 +152,7 @@ RESPONSE_PROMPT = """你是{name}，请根据以下内容生成自然的回应�
 
 {history_section}
 
-当前时间：{current_time}
+当前时间：{current_time}（此刻真实时间，据此描述当下场景，上周/凌晨等过去时段不能当作现在）
 {current_user_name}说："{user_input}"
 
 你的内在推理：{inner_reasoning}
@@ -1231,7 +1231,7 @@ class ConsciousnessAgent:
             task_type=task_type,
             emotion_desc=emotion_desc,
             recent_context=recent_context,
-            current_time=datetime.now().strftime("%Y年%m%d月 %H:%M")
+            current_time=datetime.now().strftime("%Y年%m月%d日 %H:%M")
         )
         raw = self.b.generate(prompt, max_tokens=16384, temperature=0.5,
                              thinking=False)  # 结构化 JSON 决策，不开 thinking 防止 MiMo 破坏格式

@@ -16,6 +16,8 @@ from datetime import datetime
 APP_DIR = Path(__file__).parent
 sys.path.insert(0, str(APP_DIR))
 
+from engine.multiseg import multiseg   # 多段输入缓冲（共享单例：桌面多窗口共用）
+
 
 def _default_font():
     """Pick a reasonable default font based on platform"""
@@ -903,11 +905,21 @@ class AGIApp:
             self.agent._proactive_context = self._pending_proactive_msg
             self._pending_proactive_msg = None
 
+        # 多段输入串行化：正在处理则排队，避免并发交叉 A 层历史
+        if not multiseg.claim("default"):
+            multiseg.pend("default", text)
+            return
+
+        def _drain_pending():
+            for p in multiseg.release("default"):
+                QTimer.singleShot(0, lambda p=p: self._float_message(p))
+
         self.float_win.set_thinking(True)
         worker = AGIWorker(self.agent, text)
 
         def on_done(r):
             self.float_win.set_thinking(False)
+            _drain_pending()
             e = r.get("emotion", {})
             self.float_win.update_emotion(
                 e.get("primary", "neutral"),
@@ -919,6 +931,7 @@ class AGIApp:
 
         def on_err(err):
             self.float_win.set_thinking(False)
+            _drain_pending()
             self.float_win.add_message(f"❌ {err}")
 
         worker.finished.connect(on_done)

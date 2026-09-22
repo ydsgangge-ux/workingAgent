@@ -510,7 +510,8 @@ PROVIDER_INFO = {
     "mimo": {
         "name": "小米 MiMo",
         "url":  "https://mimo.mi.com",
-        "models": ["mimo-v2.5", "mimo-v2.5-pro"],
+        "models": ["mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-pro",
+                   "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed"],
         "default_model": "mimo-v2.5",
         "thinking_capable": True,
     },

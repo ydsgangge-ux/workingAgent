@@ -69,7 +69,8 @@ VISION_PROVIDER_INFO = {
     "mimo": {
         "name": "小米 MiMo (mimo-v2.5)",
         "url": "https://mimo.mi.com",
-        "models": ["mimo-v2.5"],
+        "models": ["mimo-v2.5", "mimo-v2.6-pro", "mimo-v2.6-flash",
+                   "mimo-v2.6-pro-ultraspeed"],
         "default_model": "mimo-v2.5",
         "supports": ["image", "video", "audio"],
     },
