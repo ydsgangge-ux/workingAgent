@@ -222,6 +222,38 @@ class ConsciousnessAgent:
             print(f"\n{'─'*50}")
             print(f"[A层·{tag}] {content}")
 
+    def _describe_visual_memory(self, mem) -> str:
+        """把一条视觉记忆的完整精细字段拼接成可读文本，用于注入 prompt。
+
+        保留对象、人物动作、事件、置信度等精细度，与「发图片附件」一致，
+        而非只给一句 description 摘要。
+        """
+        parts = [f"描述: {getattr(mem, 'description', '')}"]
+        objs = getattr(mem, "objects", None) or []
+        if objs:
+            names = []
+            for o in objs[:5]:
+                label = o.get("label") if isinstance(o, dict) else str(o)
+                state = (o.get("state") if isinstance(o, dict) else "")
+                names.append(f"{label}{('('+state+')') if state else ''}")
+            parts.append(f"物体: {', '.join(names)}")
+        persons = getattr(mem, "persons", None) or []
+        if persons:
+            acts = []
+            for p in persons[:3]:
+                if isinstance(p, dict):
+                    acts.append(f"{p.get('name', p.get('id', '?'))} 正在{p.get('action', '')}")
+                else:
+                    acts.append(str(p))
+            parts.append(f"人物: {'；'.join(acts)}")
+        ev = getattr(mem, "event_summary", "")
+        if ev:
+            parts.append(f"事件: {ev}")
+        conf = getattr(mem, "vision_confidence", 0)
+        if conf:
+            parts.append(f"置信度: {conf:.2f}")
+        return "\n".join(x for x in parts if x)
+
     def _get_history(self, uid: str = "default") -> List[Dict]:
         """获取指定用户的对话历史，不存在则初始化空列表（线程安全）"""
         with self._history_lock:
@@ -347,13 +379,15 @@ class ConsciousnessAgent:
         # ── 视觉触发：用户提到视觉相关话题时，实时拉取摄像头 ──
         _vision_keywords = ("看见", "看到", "摄像头", "视觉", "眼前", "画面",
                             "能不能看", "能看", "看到我", "看到什么")
+        live_vision_detail = ""   # 本帧精细识别结果，供注入
         if self.bridge and any(kw in user_input for kw in _vision_keywords):
             try:
                 from hardware.vision_pipeline import VisionPipeline
                 _vp = VisionPipeline()
                 result = _vp.run_once(force=True)
                 if result:
-                    self._log("视觉触发", f"实时分析完成: {result.description[:60]}")
+                    live_vision_detail = self._describe_visual_memory(result)
+                    self._log("视觉触发", f"实时精细分析完成: {result.description[:60]}")
                 else:
                     self._log("视觉触发", "实时分析无结果")
             except Exception as e:
@@ -378,7 +412,10 @@ class ConsciousnessAgent:
             parts = []
             if sensor_text:
                 parts.append(f"【你的真实身体状态】\n{sensor_text}")
-            if vm_summary:
+            if live_vision_detail:
+                # 用户刚问「看看摄像头」：用本帧完整精细识别，而非历史记忆摘要
+                parts.append(f"【你此刻看到的真实画面】\n{live_vision_detail}")
+            elif vm_summary:
                 parts.append(f"【你此刻看到的真实画面】\n{vm_summary}")
 
             if parts:
