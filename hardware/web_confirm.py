@@ -76,6 +76,58 @@ def resolve_confirm(confirm_id: str, approved: bool) -> bool:
     return True
 
 
+def request_user_input(prompt: str, timeout: float = 120) -> Optional[str]:
+    """
+    请求网页端采集一段用户输入（阻塞调用，等待前端提交文本）。
+    弹窗带输入框，返回用户输入的文本；超时或取消返回 None。
+    """
+    confirm_id = str(uuid.uuid4())[:8]
+    event = {
+        "id": confirm_id,
+        "type": "input_request",
+        "prompt": prompt,
+        "timestamp": time.time(),
+    }
+
+    lock = threading.Event()
+    _pending[confirm_id] = {
+        "event": event,
+        "result": None,
+        "lock": lock,
+    }
+
+    # 推送给所有 SSE 监听者
+    _notify_sse(event)
+
+    print(f"[WebInput] 等待用户输入: {prompt[:50]} (id={confirm_id})")
+
+    # 阻塞等待结果
+    ok = lock.wait(timeout=timeout)
+
+    entry = _pending.pop(confirm_id, None)
+    if entry and entry["result"] is not None:
+        text = entry["result"]
+        print(f"[WebInput] 收到输入: {text[:50]}")
+        return text
+
+    # 超时/取消
+    print(f"[WebInput] 超时/取消: {confirm_id} → 无输入")
+    return None
+
+
+def resolve_user_input(confirm_id: str, text: str) -> bool:
+    """
+    前端提交用户输入文本。
+    返回 True 表示成功处理，False 表示找不到请求。
+    """
+    entry = _pending.get(confirm_id)
+    if not entry:
+        return False
+    entry["result"] = text
+    entry["lock"].set()
+    return True
+
+
 def get_pending_confirms() -> list:
     """获取所有待确认请求"""
     return [v["event"] for v in _pending.values() if v["result"] is None]

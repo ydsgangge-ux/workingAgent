@@ -918,6 +918,16 @@ async def api_confirm(req: dict, current: dict = Depends(_get_current_user)):
     return {"ok": ok}
 
 
+@app.post("/api/user_input")
+async def api_user_input(req: dict, current: dict = Depends(_get_current_user)):
+    """前端提交用户输入的文本（ask_user_input 采集）"""
+    from hardware.web_confirm import resolve_user_input
+    confirm_id = req.get("id", "")
+    text = req.get("text", "")
+    ok = resolve_user_input(confirm_id, text)
+    return {"ok": ok}
+
+
 @app.get("/api/pending_confirms")
 async def pending_confirms(current: dict = Depends(_get_current_user)):
     """查询待确认请求"""
@@ -2318,6 +2328,7 @@ function startConfirmSSE(){
     try{
       var d=JSON.parse(e.data);
       if(d.type==='confirm_request')showConfirmDialog(d);
+      else if(d.type==='input_request')showInputDialog(d);
     }catch(ex){}
   };
   es.onerror=function(){
@@ -2353,6 +2364,32 @@ async function replyConfirm(id,approved){
   var el=document.getElementById('cfm_'+id);
   if(el)el.remove();
   try{await fetch('/api/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,approved:approved})});}catch(e){}
+}
+
+function showInputDialog(d){
+  var overlay=document.createElement('div');
+  overlay.id='uin_'+d.id;
+  overlay.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML='<div style="background:var(--paper);border:1px solid var(--rim);border-radius:14px;padding:24px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.4)">'+
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">'+
+    '<div style="width:36px;height:36px;border-radius:10px;background:rgba(61,132,255,.15);display:flex;align-items:center;justify-content:center">'+
+    '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="var(--bright)" d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 2v12h16V6H4z"/></svg></div>'+
+    '<div style="font-weight:600;color:var(--text)">需要你提供信息</div></div>'+
+    '<div style="color:var(--soft);font-size:.9rem;margin-bottom:12px;white-space:pre-wrap">'+esc(d.prompt)+'</div>'+
+    '<input id="uin_txt_'+d.id+'" type="text" style="width:calc(100% - 20px);padding:10px;border:1px solid var(--rim);border-radius:8px;background:var(--layer);color:var(--text);font-size:.9rem;margin-bottom:16px" placeholder="请输入...">'+
+    '<div style="display:flex;gap:10px;justify-content:flex-end">'+
+    '<button onclick="submitInput(\''+d.id+'\',null)" style="padding:8px 20px;border-radius:8px;border:1px solid var(--rim);background:var(--layer);color:var(--soft);cursor:pointer;font-size:.9rem">取消</button>'+
+    '<button onclick="submitInput(\''+d.id+'\',document.getElementById(\'uin_txt_'+d.id+'\').value)" style="padding:8px 20px;border-radius:8px;border:none;background:var(--bright);color:#fff;cursor:pointer;font-size:.9rem;font-weight:600">提交</button>'+
+    '</div></div>';
+  document.body.appendChild(overlay);
+  var inp=document.getElementById('uin_txt_'+d.id);
+  if(inp){inp.focus();inp.addEventListener('keydown',function(ev){if(ev.key==='Enter')submitInput(d.id,inp.value);});}
+}
+
+async function submitInput(id,text){
+  var el=document.getElementById('uin_'+id);
+  if(el)el.remove();
+  try{await fetch('/api/user_input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,text:text||''})});}catch(e){}
 }
 </script>
 </body>

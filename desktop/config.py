@@ -74,6 +74,9 @@ DEFAULT_CONFIG = {
     # ── 飞书机器人 ──
     "lark_app_id":        "",
     "lark_app_secret":    "",
+    # ── 内嵌可见浏览器（CDP 同源驱动）──
+    "use_embedded_browser":  False,   # 开启后主程序内嵌浏览器 Tab，AI 通过 CDP 操作同一页面（保留登录态）
+    "embedded_browser_port": 9222,    # QtWebEngine CDP 调试端口
     # ── 记忆联想增强（检索时相似记忆联想）──
     "assoc_enable":       True,   # 联想总开关：false 则恢复纯原检索
     "assoc_temp":         0.15,   # 联想温度：越小越精/越少，越大越多但杂

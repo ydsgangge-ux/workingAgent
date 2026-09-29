@@ -912,24 +912,96 @@ def open_application(target: str) -> Dict:
         return {"ok": False, "error": str(e)}
 
 
-# 持久浏览器会话：跨调用复用同一浏览器/页面，模拟人连续操作
+# ── 专用线程托管的浏览器会话 ─────────────────────────
+# playwright sync API 的实例只能由"创建它的那条线程"操作，跨线程会报
+# "cannot switch to a different thread"。B 层工具循环每次任务可能在不同线程
+# 运行，因此把浏览器实例常驻在一条专用线程里，所有操作经队列投进该线程执行。
+import queue as _queue
+import time as _time
+
+# 仅由浏览器专用线程读写；其他线程通过 _br_sync 提交闭包间接访问
 _BR_SESSION = {"pw": None, "browser": None, "page": None}
-_BR_LOCK = threading.Lock()
+_br_task_q = _queue.Queue()          # (task_id, 闭包)
+_br_results = {}                     # task_id -> (ok, value)
+_br_seq = [0]
+_br_worker_started = False
+_br_worker_lock = threading.Lock()
 
 
-def _get_browser_page():
-    """惰性创建并复用浏览器，返回 (browser, page)；首次调用后才启动进程内常驻会话"""
+def _br_worker_loop():
+    """浏览器专用线程：负责 sync_playwright 启动、常驻、执行所有浏览器闭包"""
     from playwright.sync_api import sync_playwright
-    if _BR_SESSION["page"] is None:
-        pw = sync_playwright().start()
+    try:
+        _BR_SESSION["pw"] = sync_playwright().start()
+    except Exception:
+        _BR_SESSION["pw"] = None
+    while True:
+        try:
+            task_id, fn = _br_task_q.get()
+        except Exception:
+            break
+        try:
+            _br_results[task_id] = (True, fn())
+        except Exception as e:
+            _br_results[task_id] = (False, str(e))
+
+
+def _ensure_br_worker():
+    """确保浏览器专用线程已启动（幂等）"""
+    global _br_worker_started
+    with _br_worker_lock:
+        if not _br_worker_started:
+            threading.Thread(target=_br_worker_loop, daemon=True).start()
+            _br_worker_started = True
+
+
+def _br_sync(fn, timeout=60):
+    """把浏览器操作闭包 fn 投进专用线程执行并阻塞取回 (ok, value/err)"""
+    _ensure_br_worker()
+    _br_seq[0] += 1
+    task_id = _br_seq[0]
+    _br_task_q.put((task_id, fn))
+    _t0 = _time.time()
+    while task_id not in _br_results:
+        if _time.time() - _t0 > timeout:
+            return (False, f"浏览器操作超时({timeout}s)")
+        _time.sleep(0.02)
+    return _br_results.pop(task_id)
+
+
+def _init_browser_session():
+    """在专用线程内创建浏览器会话；CDP 优先(内嵌)、失败降级无头。只应在 worker 线程调用"""
+    _BR_SESSION["browser"] = None
+    _BR_SESSION["page"] = None
+    pw = _BR_SESSION.get("pw")
+    if pw is None:
+        return
+    browser = None
+    page = None
+    try:
+        from desktop.config import load_config
+        cfg = load_config()
+        if cfg.get("use_embedded_browser", False):
+            port = cfg.get("embedded_browser_port", 9222)
+            conn = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+            contexts = conn.contexts
+            if contexts:
+                browser = conn
+                page = contexts[0].pages[0] if contexts[0].pages else contexts[0].new_page()
+    except Exception:
+        page = None  # 连接失败则降级无头
+    if page is None:
         browser = pw.chromium.launch(headless=True)
         page = browser.new_page()
-        _BR_SESSION.update(pw=pw, browser=browser, page=page)
-    return _BR_SESSION["browser"], _BR_SESSION["page"]
+    _BR_SESSION.update(browser=browser, page=page)
 
 
 def _close_browser():
-    """关闭当前浏览器并清空会话状态"""
+    """关闭当前浏览器并清空会话状态（专用线程内执行）"""
+    _br_sync(_close_browser_worker, timeout=30)
+
+
+def _close_browser_worker():
     for key in ("page", "browser"):
         obj = _BR_SESSION.get(key)
         if obj is not None:
@@ -945,6 +1017,7 @@ def _close_browser():
         except Exception:
             pass
         _BR_SESSION["pw"] = None
+    return None
 
 
 @register_tool(
@@ -962,15 +1035,18 @@ def _close_browser():
 )
 def browser_action(action: str, url: str = None,
                    selector: str = None, value: str = None) -> Dict:
-    with _BR_LOCK:
-        try:
-            if action == "close":
-                _close_browser()
-                return {"ok": True, "closed": True}
+    # 所有浏览器操作统一投到专用线程执行，避免 playwright 跨线程 "cannot switch"
+    try:
+        if action == "close":
+            _close_browser()
+            return {"ok": True, "closed": True}
 
-            if not _BR_SESSION.get("page"):
-                _get_browser_page()
+        def _run():
+            if _BR_SESSION.get("page") is None:
+                _init_browser_session()
             page = _BR_SESSION["page"]
+            if page is None:
+                raise RuntimeError("浏览器创建失败（playwright 未安装）")
 
             if action == "open_url" and url:
                 page.goto(url, timeout=20000)
@@ -1012,11 +1088,51 @@ def browser_action(action: str, url: str = None,
 
             return {"ok": False, "error": f"未知操作: {action}"}
 
-        except ImportError:
+        ok, value = _br_sync(_run, timeout=90)
+        if ok:
+            return value
+        if "playwright" in str(value).lower() or "pip install" in str(value).lower():
             return {"ok": False,
                     "error": "需要安装：pip install playwright && playwright install chromium"}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(value)}
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════
+# 用户文本采集工具（需凭据/输入时 LLM 主动调用）
+# ═══════════════════════════════════════════════════
+
+# 可注入的采集回调：(prompt: str) -> Optional[str]，由 web/桌面两端注入实现
+_ask_input_callback = None
+
+
+def set_ask_input_callback(fn):
+    global _ask_input_callback
+    _ask_input_callback = fn
+
+
+@register_tool(
+    name="ask_user_input",
+    description="当任务需要用户提供无法从系统获取的信息（如邮箱账号、密码、验证码、授权码、额外参数）时调用，向用户弹窗采集一段文本输入。返回用户输入的内容。优先在无法继续时使用，避免反复猜测。",
+    parameters={
+        "prompt": {"type": "string",
+                   "description": "向用户展示的提示语，说明需要提供什么信息、怎么获取",
+                   "required": True},
+    },
+    risk="low"
+)
+def ask_user_input(prompt: str) -> Dict:
+    if not _ask_input_callback:
+        return {"ok": False, "error": "未注入用户输入采集回调，无法获取输入"}
+    try:
+        text = _ask_input_callback(prompt)
+    except Exception as e:
+        return {"ok": False, "error": f"采集用户输入失败: {e}"}
+    if not text:
+        return {"ok": False, "error": "用户未提供输入"}
+    return {"ok": True, "input": text}
 
 
 # ═══════════════════════════════════════════════════

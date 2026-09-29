@@ -346,6 +346,14 @@ class TimedMsgBridge(QObject):
 class AGIApp:
 
     def __init__(self):
+        # ── 内嵌可见浏览器：QApplication 创建前开启 CDP 调试端口（QtWebEngine 要求）──
+        try:
+            _cfg = load_config()
+            if _cfg.get("use_embedded_browser", False):
+                os.environ["QTWEBENGINE_REMOTE_DEBUGGING"] = str(
+                    _cfg.get("embedded_browser_port", 9222))
+        except Exception:
+            pass
         self.app = QApplication(sys.argv)
         _install_quiet_font_handler()   # 先压掉 QFont setPointSize(-1) 噪音
         self.app.setApplicationName(APP_NAME)

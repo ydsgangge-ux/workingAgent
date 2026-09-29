@@ -17,6 +17,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional, Callable
 from engine.tools import execute_tool, get_all_schemas, get_tool_risk, TOOL_REGISTRY
+from engine import tools as _tools
 from engine.plan import parse_plan_text
 from engine.validator import validate_tool_output
 
@@ -56,6 +57,7 @@ class BLayerExecutor:
     ):
         self.llm = llm_client
         self.confirm = confirm_callback or default_confirm
+        self.ask_input = None   # 用户文本采集回调 (prompt:str)->Optional[str]，由上层注入
         self.max_steps = max_tool_steps
         self.allowed_tools = allowed_tools
         self.verbose = verbose
@@ -125,6 +127,9 @@ class BLayerExecutor:
         steps = []
         tools_used = []
         self._python_fallback_attempted = False
+
+        # 注入用户输入采集回调，供 ask_user_input 工具在需要凭据/输入时弹窗采集
+        _tools.set_ask_input_callback(getattr(self, 'ask_input', None))
 
         if not use_tools:
             result = self.generate(task, max_tokens=max_tokens)

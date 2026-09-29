@@ -35,6 +35,7 @@ from engine.auth import AuthManager, AuthState
 # 合计:     ~13500  token  << 64K 很安全
 HISTORY_STORE_LIMIT = 40    # 内存里保留40条（20轮）
 HISTORY_SEND_LIMIT  = 40    # 发给LLM时用全部40条
+_RESPONSE_RETRY_MAX  = 2     # 回应为空值时自动重新生成的最大次数
 MEMORY_SUMMARY_K    = 10    # 大纲检索数量
 MEMORY_OUTLINE_K    = 6     # 细纲检索数量
 MEMORY_DETAIL_K     = 3     # 细节检索数量
@@ -854,22 +855,31 @@ class ConsciousnessAgent:
             except Exception:
                 pass
 
-        # ⑤ 生成回应（带完整对话历史）
-        try:
-            response = self._generate_response(
-                user_input, memory_context,
-                reasoning.get("inner_reasoning", ""),
-                reasoning.get("response_intent", ""),
-                reasoning.get("response_tone", self.personality.speech_style),
-                tool_result_section,
-                profile_context=profile_context,
-                current_user_name=current_user_name,
-                current_user_id=current_uid,
-            )
-            self._log("回应", response[:200] + ("..." if len(response) > 200 else ""))
-        except Exception as e:
-            self._log("回应", f"生成失败: {e}")
-            response = f"抱歉，我在组织回应时遇到了问题：{e}"
+        # ⑤ 生成回应（带完整对话历史）；空回应自动重新生成，最多重试 _RESPONSE_RETRY_MAX 次
+        response = ""
+        for _attempt in range(_RESPONSE_RETRY_MAX + 1):
+            try:
+                response = self._generate_response(
+                    user_input, memory_context,
+                    reasoning.get("inner_reasoning", ""),
+                    reasoning.get("response_intent", ""),
+                    reasoning.get("response_tone", self.personality.speech_style),
+                    tool_result_section,
+                    profile_context=profile_context,
+                    current_user_name=current_user_name,
+                    current_user_id=current_uid,
+                )
+            except Exception as e:
+                self._log("回应", f"生成失败: {e}")
+                response = f"抱歉，我在组织回应时遇到了问题：{e}"
+                break
+            if response and response.strip():
+                break  # 拿到正常内容，结束重试
+            self._log("回应", f"回应为空值，重新生成正在继续（第{_attempt + 1}次）")
+        if not response or not response.strip():
+            # 重试完毕后仍为空，给一句自然兜底，不裸发空消息
+            response = f"（张了张嘴，没想出该说什么）"
+        self._log("回应", response[:200] + ("..." if len(response) > 200 else ""))
 
         # ⑥ 存储决策（即使回应生成失败也要保存记忆）
         stored_ids = {}

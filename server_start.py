@@ -110,6 +110,13 @@ executor = BLayerExecutor(
     verbose=True
 )
 
+# 注入用户文本采集回调：B 层 ask_user_input 通过 web 弹窗采集
+try:
+    from hardware.web_confirm import request_user_input
+    executor.ask_input = lambda prompt: request_user_input(prompt)
+except Exception as e:
+    print(f"[WebInput] 用户文本采集注入失败: {e}")
+
 # 用户画像
 user_profile = UserProfileManager(DB_FILE)
 

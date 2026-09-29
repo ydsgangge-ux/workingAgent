@@ -63,6 +63,7 @@ class AGIWorker(QThread):
     finished = pyqtSignal(dict)
     error    = pyqtSignal(str)
     confirm_requested = pyqtSignal(str, object)  # (tool_name, params_dict)
+    input_requested   = pyqtSignal(str, str, str)  # (request_id, prompt, tool_name)
 
     TIMEOUT_SEC = 120   # 最长等待时间，超时后报错
 
@@ -72,6 +73,8 @@ class AGIWorker(QThread):
         self.user_input = user_input
         self._confirm_result = None   # 主线程写，子线程读
         self._confirm_event  = None   # threading.Event 用于跨线程等待
+        self._input_result = None     # 文本采集结果（主线程写，子线程读）
+        self._input_event  = None     # threading.Event 用于跨线程等待
 
     def run(self):
         if self.agent is None:
@@ -80,10 +83,13 @@ class AGIWorker(QThread):
 
         import threading
         self._confirm_event = threading.Event()
+        self._input_event = threading.Event()
 
         # 把 confirm 替换为线程安全的版本
         original_confirm = self.agent.b.confirm
         self.agent.b.confirm = self._thread_safe_confirm
+        # 同时注入用户文本采集回调
+        self.agent.b.ask_input = self._thread_safe_ask_input
 
         try:
             result = self.agent.process(self.user_input)
@@ -108,6 +114,23 @@ class AGIWorker(QThread):
         self._confirm_result = allowed
         if self._confirm_event:
             self._confirm_event.set()
+
+    def _thread_safe_ask_input(self, prompt: str) -> str:
+        """从工作线程调用 → 发信号给主线程弹窗采集文本 → 等待结果"""
+        import uuid
+        request_id = str(uuid.uuid4())[:8]
+        self._input_result = None
+        self._input_event.clear()
+        self.input_requested.emit(request_id, prompt, "B层")
+        # 等待主线程提交（超时 120 秒）
+        self._input_event.wait(timeout=120)
+        return self._input_result or ""
+
+    def set_input_result(self, text: str):
+        """主线程槽：设置文本采集结果并唤醒工作线程"""
+        self._input_result = text
+        if self._input_event:
+            self._input_event.set()
 
 
 # ── 消息气泡组件 ─────────────────────────────────
@@ -2548,6 +2571,17 @@ class ToolTestPage(QWidget):
 
         self._result_tabs.addTab(self._result_formatted, "📄 格式化")
         self._result_tabs.addTab(self._result_raw,       "{ } 原始 JSON")
+
+        # ── 内嵌可见浏览器（CDP 同源）：仅开启时创建视图，playwright 通过 CDP 连它 ──
+        self._browser_view = None
+        try:
+            from desktop.config import load_config
+            if load_config().get("use_embedded_browser", False):
+                from PyQt6.QtWebEngineWidgets import QWebEngineView
+                self._browser_view = QWebEngineView()
+                self._result_tabs.addTab(self._browser_view, "🌐 浏览器")
+        except Exception:
+            self._browser_view = None
 
         right_lay.addLayout(result_header)
         right_lay.addWidget(self._result_tabs, stretch=1)
@@ -6163,6 +6197,7 @@ class MainWindow(QMainWindow):
         self._worker.finished.connect(self._on_result)
         self._worker.error.connect(self._on_error)
         self._worker.confirm_requested.connect(self._on_confirm_requested)
+        self._worker.input_requested.connect(self._on_input_requested)
         self._worker.start()
 
     def _on_confirm_requested(self, tool_name: str, params: dict):
@@ -6182,6 +6217,34 @@ class MainWindow(QMainWindow):
         box.setStyleSheet(get_qss(load_config().get("theme", "dark")))
         result = (box.exec() == QMessageBox.StandardButton.Yes)
         self._worker.set_confirm_result(result)
+
+    def _on_input_requested(self, request_id: str, prompt: str, tool_name: str):
+        """主线程槽：弹带输入框的对话框，采集用户文本并回传给工作线程"""
+        from PyQt6.QtWidgets import (
+            QDialog, QLineEdit, QVBoxLayout, QLabel, QDialogButtonBox
+        )
+        dlg = QDialog(self)
+        dlg.setWindowTitle("✏️  需要你提供信息")
+        dlg.setStyleSheet(get_qss(load_config().get("theme", "dark")))
+        lay = QVBoxLayout(dlg)
+        lbl = QLabel(f"<b>B 层需要以下信息：</b><br><br>{prompt}<br>")
+        lbl.setWordWrap(True)
+        edit = QLineEdit()
+        edit.setPlaceholderText("请输入...")
+        lay.addWidget(lbl)
+        lay.addWidget(edit)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        lay.addWidget(btns)
+        result = {"text": ""}
+        def _on_ok():
+            result["text"] = edit.text().strip()
+            dlg.accept()
+        btns.accepted.connect(_on_ok)
+        btns.rejected.connect(dlg.reject)
+        dlg.exec()
+        self._worker.set_input_result(result["text"])
 
     def _on_result(self, result: dict):
         self.chat_page.remove_thinking_indicator()
