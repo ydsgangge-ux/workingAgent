@@ -35,6 +35,40 @@ class OpenAICompatClient:
         """将统一的思考参数翻译成厂商格式。基类默认不支持。"""
         return {}
 
+    # ── HTTP 请求 ─────────────────────────────────────────────────
+    def _post(self, body: Dict) -> Dict:
+        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/chat/completions", data=payload,
+            headers={"Content-Type": "application/json; charset=utf-8",
+                     "Authorization": f"Bearer {self.api_key}"}
+        )
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return json.loads(r.read())
+
+    # ── 思考参数被拒绝时的判定 ─────────────────────────────────────
+    @staticmethod
+    def _is_thinking_rejection(err: str) -> bool:
+        """模型不支持所选思考参数（如“始终思考，不支持关闭思考”）"""
+        text = err
+        # 错误体可能是 \uXXXX 转义的 JSON，先还原成可读文本
+        if "\\u" in text or "\\U" in text:
+            try:
+                text = text.encode("utf-8").decode("unicode_escape")
+            except Exception:
+                pass
+        low = text.lower()
+        return ("思考" in text or "thinking" in low
+                or "reasoning_effort" in low)
+
+    @staticmethod
+    def _safe_effort(thinking: Optional[bool],
+                     thinking_effort: Optional[str]) -> str:
+        """厂商允许的力度：low/high/max（medium 会 400，降级为 high）"""
+        if thinking_effort in ("low", "high", "max"):
+            return thinking_effort
+        return "high" if thinking else "low"
+
     # ── generate ──────────────────────────────────────────────────
     def generate(self, prompt: str, system: str = None,
                  max_tokens: int = 1000, temperature: float = 0.7,
@@ -51,33 +85,46 @@ class OpenAICompatClient:
             msgs = messages
 
         use_model = model or self.model
-        body = {
+        base_body = {
             "model": use_model, "messages": msgs,
             "max_tokens": max_tokens, "temperature": temperature
         }
 
         # 合并思考参数
         extra = self._build_thinking_params(thinking, thinking_effort, thinking_budget)
+        body = dict(base_body)
         if extra:
             body.update(extra)
             # 思考模式下大多数厂商不支持 temperature
             body.pop("temperature", None)
 
-        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
-
-        req = urllib.request.Request(
-            f"{self.base_url}/chat/completions", data=payload,
-            headers={"Content-Type": "application/json; charset=utf-8",
-                     "Authorization": f"Bearer {self.api_key}"}
-        )
         try:
-            with urllib.request.urlopen(req, timeout=90) as r:
-                return json.loads(r.read())["choices"][0]["message"]["content"]
+            data = self._post(body)
         except urllib.error.HTTPError as e:
             err = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"HTTP {e.code}: {err[:300]}")
+            # 始终思考的模型不允许关闭思考：降级重试，而不是直接报错
+            if not (e.code == 400 and extra and self._is_thinking_rejection(err)):
+                raise RuntimeError(f"HTTP {e.code}: {err[:300]}")
+            retries = [
+                # ① 去掉开关，只保留厂商允许的力度参数
+                {**{k: v for k, v in body.items() if k not in extra},
+                 "reasoning_effort": self._safe_effort(thinking, thinking_effort)},
+                # ② 完全交给模型默认（去掉思考参数与 temperature）
+                {k: v for k, v in base_body.items() if k != "temperature"},
+            ]
+            data, last_err = None, (e.code, err)
+            for retry_body in retries:
+                try:
+                    data = self._post(retry_body)
+                    break
+                except urllib.error.HTTPError as e2:
+                    last_err = (e2.code, e2.read().decode("utf-8", errors="replace"))
+            if data is None:
+                raise RuntimeError(f"HTTP {last_err[0]}: {last_err[1][:300]}")
         except urllib.error.URLError as e:
             raise RuntimeError(f"Network error: {e.reason}")
+
+        return data["choices"][0]["message"]["content"]
 
 
 # ── DeepSeek（V4 默认开启思考）─────────────────────────────────────────
@@ -91,7 +138,7 @@ class DeepSeekClient(OpenAICompatClient):
         if thinking is False:
             return {"thinking": {"type": "disabled"}}
         if thinking is True:
-            effort = thinking_effort or "high"
+            effort = self._safe_effort(True, thinking_effort)
             return {"thinking": {"type": "enabled"}, "reasoning_effort": effort}
         return {}  # None = 模型默认（V4 默认开启）
 
@@ -142,8 +189,11 @@ class ZhipuClient(OpenAICompatClient):
 
     def _build_thinking_params(self, thinking, thinking_effort, thinking_budget):
         params = {}
-        if thinking is not None:
-            params["enable_thinking"] = thinking
+        if thinking is True:
+            # 智谱思考型模型只接受 low/high/max 三档力度
+            params["reasoning_effort"] = self._safe_effort(True, thinking_effort)
+        elif thinking is False:
+            params["enable_thinking"] = False
         if thinking_budget:
             params["thinking_budget"] = thinking_budget
         return params

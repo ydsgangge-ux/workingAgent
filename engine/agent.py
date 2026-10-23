@@ -1280,8 +1280,14 @@ class ConsciousnessAgent:
             recent_context=recent_context,
             current_time=datetime.now().strftime("%Y年%m月%d日 %H:%M")
         )
-        raw = self.b.generate(prompt, max_tokens=16384, temperature=0.5,
-                             thinking=False)  # 结构化 JSON 决策，不开 thinking 防止 MiMo 破坏格式
+        # 真正按设置里的思考模式决定这次推理是否深度思考
+        _do_think = self._should_think(thinking_mode, complexity, task_type)
+        raw = self.b.generate(
+            prompt, max_tokens=16384, temperature=0.5,
+            thinking=_do_think,
+            thinking_effort=(self._get_config("thinking_effort", "high")
+                             if _do_think else None)
+        )
         parsed = self._parse_json(raw, {
             "inner_reasoning":  "需要认真考虑",
             "response_intent":  "给出真实的回应",

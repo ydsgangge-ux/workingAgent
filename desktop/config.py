@@ -88,12 +88,13 @@ DEFAULT_CONFIG = {
 def load_config() -> dict:
     if CONFIG_FILE.exists():
         try:
-            saved = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            # utf-8-sig：兼容记事本等编辑器保存时写入的 BOM，避免解析失败静默回退到默认配置
+            saved = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
             cfg = DEFAULT_CONFIG.copy()
             cfg.update(saved)
             return cfg
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[配置] 读取失败（已回退默认配置）: {e}")
     return DEFAULT_CONFIG.copy()
 
 

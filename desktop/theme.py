@@ -101,7 +101,13 @@ def apply_theme(theme: str) -> str:
     # 重新应用所有登记过的内联样式
     for weak, raw in list(_inline.items()):
         w = weak()
-        if w is not None and _orig_setStyleSheet is not None:
+        if w is None or _orig_setStyleSheet is None:
+            _inline.pop(weak, None)
+            continue
+        try:
             _orig_setStyleSheet(w, remap(raw))
+        except RuntimeError:
+            # 控件已被 Qt 销毁（C++ 对象已删除），清理登记，避免每次换主题都报错
+            _inline.pop(weak, None)
     from desktop.config import get_qss
     return get_qss(theme)

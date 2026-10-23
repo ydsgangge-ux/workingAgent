@@ -1755,7 +1755,7 @@ class SettingsPage(QWidget):
         btn_save = QPushButton("💾  保存设置")
         btn_save.setObjectName("btn_primary")
         btn_save.setFixedHeight(40)
-        btn_save.clicked.connect(self._save)
+        btn_save.clicked.connect(self._on_save_clicked)
 
         self._save_msg = QLabel("")
         self._save_msg.setStyleSheet("color:#3fb950;font-size:12px;")
@@ -2255,6 +2255,16 @@ class SettingsPage(QWidget):
         self._save_msg.setText("✅ 主题已切换")
         QTimer.singleShot(2500, lambda: self._save_msg.setText(""))
 
+    def _on_save_clicked(self):
+        """保存按钮兜底：任何异常都只提示，不让程序闪退"""
+        try:
+            self._save()
+        except Exception as e:
+            import traceback
+            print(f"[设置] 保存失败: {e}\n{traceback.format_exc()}")
+            self._save_msg.setText(f"❌ 保存失败: {e}")
+            self._save_msg.setStyleSheet("color:#f85149;font-size:12px;")
+
     def _save(self):
         provider_key = self._provider.currentData() or "deepseek"
         lang_key     = self._lang_combo.currentData() or "zh"
@@ -2313,6 +2323,7 @@ class SettingsPage(QWidget):
 
         save_config(self._cfg)
         self.settings_changed.emit(self._cfg)
+        self._save_msg.setStyleSheet("color:#3fb950;font-size:12px;")
         self._save_msg.setText("✅ Saved. Restart to apply.")
         QTimer.singleShot(3000, lambda: self._save_msg.setText(""))
 
@@ -6416,14 +6427,18 @@ class MainWindow(QMainWindow):
         threading.Thread(target=_run, daemon=True).start()
 
     def _on_settings_changed(self, cfg: dict):
-        # 主题切换：全局重映射 + 即时应用（QSS 无缓存，直接 setStyleSheet 即生效）
-        from desktop.theme import apply_theme
-        theme = cfg.get("theme", "dark")
-        qss = apply_theme(theme)
-        self.setStyleSheet(qss)
-        app = QApplication.instance()
-        if app is not None:
-            app.setStyleSheet(qss)
+        try:
+            # 主题切换：全局重映射 + 即时应用（QSS 无缓存，直接 setStyleSheet 即生效）
+            from desktop.theme import apply_theme
+            theme = cfg.get("theme", "dark")
+            qss = apply_theme(theme)
+            self.setStyleSheet(qss)
+            app = QApplication.instance()
+            if app is not None:
+                app.setStyleSheet(qss)
+        except Exception as e:
+            import traceback
+            print(f"[设置] 应用主题失败: {e}\n{traceback.format_exc()}")
         # 重建 agent 以应用新 API key
         pass  # 由主程序处理
 

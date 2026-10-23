@@ -57,7 +57,8 @@ except ImportError as e:
 
 # 导入应用模块（这里报错说明项目文件有问题）
 try:
-    from desktop.config  import APP_NAME, APP_VERSION, load_config, save_config, get_qss, DB_FILE
+    from desktop.config  import (APP_NAME, APP_VERSION, load_config, save_config,
+                                 get_qss, DB_FILE, LOG_FILE)
     from desktop.theme   import install_shim as theme_install_shim
     from desktop.system  import SystemTray, GlobalHotkey, AutoStart
     from desktop.screenshot import ScreenshotSelector, OCRThread
@@ -79,6 +80,25 @@ except Exception as e:
     except Exception:
         input("按回车退出…")
     sys.exit(1)
+
+
+def _install_exception_guard():
+    """未捕获异常兜底：写日志 + 保留界面，避免 PyQt6 槽函数异常导致整个程序闪退"""
+    import traceback
+
+    def _log(t, v, tb):
+        text = "".join(traceback.format_exception(t, v, tb))
+        print(f"[未捕获异常]\n{text}", flush=True)
+        try:
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] {text}\n")
+        except Exception:
+            pass
+
+    # sys.excepthook 非默认时 PyQt6 不会 abort 进程
+    sys.excepthook = _log
+    threading.excepthook = lambda args: _log(
+        args.exc_type, args.exc_value, args.exc_traceback)
 
 
 # ── 情绪 → emoji 前缀映射（方案 D）─────────────────
@@ -132,6 +152,29 @@ def make_splash() -> QSplashScreen:
     splash = QSplashScreen(px)
     splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
     return splash
+
+
+# ── SimLife 后端（全进程只启动一次）──────────────────
+_simlife_backend_started = False
+
+
+def _start_simlife_backend():
+    """启动 SimLife 后端服务。引擎重载时复用已有进程，避免端口 8769 冲突崩溃"""
+    global _simlife_backend_started
+    if _simlife_backend_started:
+        return
+    try:
+        from simlife.backend.main import app as simlife_app
+        import uvicorn as _uvicorn
+
+        def _run_simlife():
+            _uvicorn.run(simlife_app, host="127.0.0.1", port=8769,
+                         log_level="warning", access_log=False)
+
+        threading.Thread(target=_run_simlife, daemon=True).start()
+        _simlife_backend_started = True
+    except Exception as e:
+        print(f"[SimLife] 后端自动启动失败（{e}），将回退到文件读取模式")
 
 
 # ── AGI 核心异步加载线程 ─────────────────────────
@@ -254,16 +297,7 @@ class EngineLoader(QThread):
                     print(f"[SimLife] 暂停失败（{e}），不影响硬件模式运行")
 
                 # SimLife 后端仍然启动（pause API 需要后端运行）
-                try:
-                    from simlife.backend.main import app as simlife_app
-                    import uvicorn as _uvicorn
-                    def _run_simlife():
-                        _uvicorn.run(simlife_app, host="127.0.0.1", port=8769,
-                                      log_level="warning", access_log=False)
-                    _simlife_thread = threading.Thread(target=_run_simlife, daemon=True)
-                    _simlife_thread.start()
-                except Exception:
-                    pass
+                _start_simlife_backend()
 
             else:
                 # ── 屏幕模式：SimLife 正常运行，无硬件 ──
@@ -295,17 +329,7 @@ class EngineLoader(QThread):
                 except Exception as e:
                     print(f"[SimLife] 未启用（{e}）")
 
-                try:
-                    from simlife.backend.main import app as simlife_app
-                    import uvicorn as _uvicorn
-                    def _run_simlife():
-                        _uvicorn.run(simlife_app, host="127.0.0.1", port=8769,
-                                      log_level="warning", access_log=False)
-                    _simlife_thread = threading.Thread(target=_run_simlife, daemon=True)
-                    _simlife_thread.start()
-                    print("[SimLife] 后端服务已在后台启动（端口 8769）")
-                except Exception as e:
-                    print(f"[SimLife] 后端自动启动失败（{e}），将回退到文件读取模式")
+                _start_simlife_backend()
 
                 if not simlife_client or not simlife_client.is_available():
                     print()
@@ -355,6 +379,7 @@ class AGIApp:
         except Exception:
             pass
         self.app = QApplication(sys.argv)
+        _install_exception_guard()      # 兜底：槽函数异常不再导致闪退
         _install_quiet_font_handler()   # 先压掉 QFont setPointSize(-1) 噪音
         self.app.setApplicationName(APP_NAME)
         self.app.setApplicationVersion(APP_VERSION)
@@ -426,6 +451,14 @@ class AGIApp:
 
     # ── 引擎加载回调 ────────────────────────────
     def _on_engine_ready(self, agent):
+        """槽函数兜底：这里任何异常都不允许把整个程序带崩"""
+        try:
+            self._apply_engine(agent)
+        except Exception as e:
+            import traceback
+            print(f"[引擎] 就绪回调异常: {e}\n{traceback.format_exc()}")
+
+    def _apply_engine(self, agent):
         self.agent = agent
         self.main_win.agent = agent
         self.float_win.agent = agent
@@ -448,19 +481,21 @@ class AGIApp:
 
         if hasattr(agent, 'simlife') and agent.simlife:
             self.float_win.simlife_client = agent.simlife
-            # SimLife 状态刷新定时器（每 30 秒）
-            self._simlife_timer = QTimer()
-            self._simlife_timer.timeout.connect(self._refresh_simlife_float)
-            self._simlife_timer.start(30_000)
-            print("[SimLife] 悬浮窗状态面板已启用")
+            # SimLife 状态刷新定时器（每 30 秒）——引擎重载时不重复创建
+            if getattr(self, "_simlife_timer", None) is None:
+                self._simlife_timer = QTimer()
+                self._simlife_timer.timeout.connect(self._refresh_simlife_float)
+                self._simlife_timer.start(30_000)
+                print("[SimLife] 悬浮窗状态面板已启用")
 
         # 把 LLM 客户端共享给编程智能体页
         self.main_win.coder_page.set_llm(agent.b.llm)
 
-        # 启动记忆衰减定时器（每2小时衰减一次）
-        self._decay_timer = QTimer()
-        self._decay_timer.timeout.connect(self._apply_memory_decay)
-        self._decay_timer.start(2 * 60 * 60 * 1000)   # 2小时
+        # 启动记忆衰减定时器（每2小时衰减一次）——引擎重载时不重复创建
+        if getattr(self, "_decay_timer", None) is None:
+            self._decay_timer = QTimer()
+            self._decay_timer.timeout.connect(self._apply_memory_decay)
+            self._decay_timer.start(2 * 60 * 60 * 1000)   # 2小时
 
         self.splash.finish(self.main_win)
         self.tray.notify(APP_NAME, "AGI 核心就绪 ✅")
@@ -471,9 +506,16 @@ class AGIApp:
         print(f"[就绪] 记忆库：{stats['total']} 条")
         print(f"[就绪] 向量模式：{_embedding_mode}")
 
-        # 启动身份验证（后台线程，不阻塞界面）
-        if agent.auth:
+        # 启动身份验证（后台线程，不阻塞界面）——只在首次加载时启动
+        if agent.auth and not getattr(self, "_auth_started", False):
+            self._auth_started = True
             self.main_win.start_auth_verification(agent.auth)
+
+        # 一次性服务（Web/聊天/调度器）：引擎重载时不能重复启动，
+        # 否则端口被占用、定时器叠加，容易引发崩溃
+        if getattr(self, "_services_started", False):
+            return
+        self._services_started = True
 
         # 启动手机端 Web 服务（共享同一个 agent 实例）
         try:
@@ -948,18 +990,57 @@ class AGIApp:
         self._float_worker = worker   # 防 GC
 
     # ── 设置变化 ─────────────────────────────────
+    # 只有这些改动才需要重建引擎；思考模式/深度/预算等属于运行时读取，热更新即可，
+    # 避免每次保存都重启引擎（旧引擎的端口/定时器/线程未清理，容易直接崩溃）
+    _RESTART_KEYS = (
+        "api_provider", "api_key", "llm_model",
+        "ollama_url", "ollama_model",
+        "vision_provider", "vision_model", "vision_api_key", "vision_base_url",
+        "mode",
+    )
+
     def _on_settings(self, cfg: dict):
-        self.cfg = cfg
-        save_config(cfg)
-        # 重注册热键
-        self.hotkey.unregister_all()
-        self._register_hotkeys()
-        # 重新加载引擎（新 API Key）
-        self._loader = EngineLoader(cfg)
-        self._loader.ready.connect(self._on_engine_ready)
-        self._loader.failed.connect(self._on_engine_failed)
-        self._loader.start()
-        self.tray.notify("设置已更新", "正在重新连接 API…")
+        try:
+            old_cfg = self.cfg or {}
+            self.cfg = cfg
+            save_config(cfg)
+
+            # 热更新：让正在运行的 agent 立刻读到新的思考模式等设置
+            if self.agent is not None:
+                try:
+                    self.agent._cfg = cfg
+                except Exception:
+                    pass
+
+            need_restart = (
+                self.agent is None
+                or any(old_cfg.get(k) != cfg.get(k) for k in self._RESTART_KEYS)
+            )
+
+            # 重注册热键（仅在组合键变化时）
+            if (old_cfg.get("hotkey_activate") != cfg.get("hotkey_activate")
+                    or old_cfg.get("hotkey_screenshot") != cfg.get("hotkey_screenshot")):
+                self.hotkey.unregister_all()
+                self._register_hotkeys()
+
+            if not need_restart:
+                self.tray.notify("设置已更新", "已即时生效")
+                return
+
+            # 重新加载引擎（新 API Key / 服务商 / 模型）
+            self._loader = EngineLoader(cfg)
+            self._loader.ready.connect(self._on_engine_ready)
+            self._loader.failed.connect(self._on_engine_failed)
+            # 持有所有 loader 引用，避免 QThread 运行中被回收导致进程崩溃
+            self._loaders = [ld for ld in getattr(self, "_loaders", [])
+                             if ld.isRunning()]
+            self._loaders.append(self._loader)
+            self._loader.start()
+            self.tray.notify("设置已更新", "正在重新连接 API…")
+        except Exception as e:
+            import traceback
+            print(f"[设置] 保存后应用失败: {e}\n{traceback.format_exc()}")
+            self.tray.notify("设置已保存", f"部分功能未能应用：{e}")
 
     def _quit(self):
         self.hotkey.unregister_all()
