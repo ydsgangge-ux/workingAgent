@@ -2120,6 +2120,53 @@ class SettingsPage(QWidget):
         lark_status_lbl.setStyleSheet(f"color:{lark_status_color};font-size:11px;")
         lark_lay.addWidget(lark_status_lbl, 3, 1)
 
+        # QQ 机器人（OneBot 11 / NapCat）
+        try:
+            import websocket as _ws_client  # noqa: F401
+            websocket_ok = True
+        except ImportError:
+            websocket_ok = False
+
+        qq_box = QGroupBox("🐧 QQ 机器人（OneBot 11）")
+        qq_lay = QGridLayout(qq_box)
+
+        self._qq_enable = QCheckBox("启用 QQ 机器人")
+        self._qq_enable.setChecked(bool(self._cfg.get("qq_enable", False)))
+        qq_lay.addWidget(self._qq_enable, 0, 0, 1, 2)
+
+        qq_lay.addWidget(QLabel("WS 地址:"), 1, 0)
+        self._qq_ws_url = QLineEdit(self._cfg.get("qq_ws_url", "ws://127.0.0.1:3001"))
+        self._qq_ws_url.setPlaceholderText("ws://127.0.0.1:3001")
+        qq_lay.addWidget(self._qq_ws_url, 1, 1)
+
+        qq_lay.addWidget(QLabel("Token:"), 2, 0)
+        self._qq_access_token = QLineEdit(self._cfg.get("qq_access_token", ""))
+        self._qq_access_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self._qq_access_token.setPlaceholderText("OneBot 鉴权 Token（可留空）")
+        qq_lay.addWidget(self._qq_access_token, 2, 1)
+
+        qq_lay.addWidget(QLabel("QQ 白名单:"), 3, 0)
+        self._qq_allowed_uids = QLineEdit(self._cfg.get("qq_allowed_uids", ""))
+        self._qq_allowed_uids.setPlaceholderText("允许的QQ号，逗号分隔；留空则不响应任何人")
+        qq_lay.addWidget(self._qq_allowed_uids, 3, 1)
+
+        qq_lay.addWidget(QLabel("群白名单:"), 4, 0)
+        self._qq_group_whitelist = QLineEdit(self._cfg.get("qq_group_whitelist", ""))
+        self._qq_group_whitelist.setPlaceholderText("允许的群号，逗号分隔；留空则忽略所有群消息")
+        qq_lay.addWidget(self._qq_group_whitelist, 4, 1)
+
+        qq_hint = QLabel("需本机登录 QQ NT 并安装 NapCatQQ，开启 WebSocket 服务器。群聊只在 @ 机器人时响应。重启后生效。")
+        qq_hint.setStyleSheet("color:#8b949e;font-size:11px;")
+        qq_hint.setWordWrap(True)
+        qq_lay.addWidget(qq_hint, 5, 1)
+
+        qq_status = ("✅ websocket-client 已安装" if websocket_ok
+                     else "⚠️ 未安装，运行: pip install websocket-client>=1.6.0")
+        qq_status_lbl = QLabel(qq_status)
+        qq_status_lbl.setStyleSheet(
+            f"color:{'#3fb950' if websocket_ok else '#d29922'};font-size:11px;")
+        qq_lay.addWidget(qq_status_lbl, 6, 1)
+
         layout.addWidget(api_box)
         layout.addWidget(vision_box)
         layout.addWidget(hotkey_box)
@@ -2131,6 +2178,7 @@ class SettingsPage(QWidget):
         layout.addWidget(news_box)
         layout.addWidget(wecom_box)
         layout.addWidget(lark_box)
+        layout.addWidget(qq_box)
         layout.addWidget(ocr_box)
         layout.addWidget(btn_save)
         layout.addWidget(self._save_msg)
@@ -2313,6 +2361,12 @@ class SettingsPage(QWidget):
         # 飞书机器人
         self._cfg["lark_app_id"]       = self._lark_app_id.text().strip()
         self._cfg["lark_app_secret"]   = self._lark_app_secret.text().strip()
+        # QQ 机器人
+        self._cfg["qq_enable"]          = self._qq_enable.isChecked()
+        self._cfg["qq_ws_url"]          = self._qq_ws_url.text().strip()
+        self._cfg["qq_access_token"]    = self._qq_access_token.text().strip()
+        self._cfg["qq_allowed_uids"]    = self._qq_allowed_uids.text().strip()
+        self._cfg["qq_group_whitelist"] = self._qq_group_whitelist.text().strip()
 
         # 立即应用语言
         try:

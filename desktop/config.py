@@ -74,6 +74,12 @@ DEFAULT_CONFIG = {
     # ── 飞书机器人 ──
     "lark_app_id":        "",
     "lark_app_secret":    "",
+    # ── QQ 机器人（OneBot 11 / NapCat）──
+    "qq_enable":          False,                        # 是否启用
+    "qq_ws_url":          "ws://127.0.0.1:3001",        # NapCat 的 WebSocket 服务器地址
+    "qq_access_token":    "",                            # OneBot 鉴权 Token（可空）
+    "qq_allowed_uids":    "",                            # QQ 号白名单（逗号分隔，空=不响应任何人）
+    "qq_group_whitelist": "",                            # 群号白名单（逗号分隔，空=不接受群聊）
     # ── 内嵌可见浏览器（CDP 同源驱动）──
     "use_embedded_browser":  False,   # 开启后主程序内嵌浏览器 Tab，AI 通过 CDP 操作同一页面（保留登录态）
     "embedded_browser_port": 9222,    # QtWebEngine CDP 调试端口

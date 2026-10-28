@@ -511,6 +511,16 @@ class AGIApp:
             self._auth_started = True
             self.main_win.start_auth_verification(agent.auth)
 
+        # QQ 机器人（OneBot 11 / NapCat）：只启动一次，引擎重载时仅更新 agent 引用
+        try:
+            if getattr(self, "_qq_bot", None) is None:
+                from qq_bot import start_qq_bot
+                self._qq_bot = start_qq_bot(agent, self.cfg)
+            else:
+                self._qq_bot.set_agent(agent)
+        except Exception as e:
+            print(f"[QQBot] 挂载失败: {e}")
+
         # 一次性服务（Web/聊天/调度器）：引擎重载时不能重复启动，
         # 否则端口被占用、定时器叠加，容易引发崩溃
         if getattr(self, "_services_started", False):

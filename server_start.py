@@ -261,6 +261,16 @@ except ImportError:
 except Exception as e:
     print(f"[LarkBot] 启动失败（{e}），飞书不可用")
 
+# ── QQ 智能机器人（OneBot 11 / NapCat，独立线程）────────────
+try:
+    from qq_bot import start_qq_bot
+
+    _qq_bot = start_qq_bot(agent, config)
+    if _qq_bot is None:
+        print("[QQBot] 未启用 QQ 机器人")
+except Exception as e:
+    print(f"[QQBot] 启动失败（{e}），QQ 不可用")
+
 # ── 启动 Web 服务（主线程阻塞式，适合服务器）────────────────
 import server as _server_module
 import uvicorn
