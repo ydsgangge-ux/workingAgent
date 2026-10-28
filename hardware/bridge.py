@@ -21,6 +21,7 @@
 import json
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from .memory_schema import VisualMemory
@@ -46,6 +47,9 @@ class Bridge:
         self._store = VisualMemoryStore()
         self._sensor_stream = None
         self._latest_sensor_text = ""
+        self._sensor_source = ""        # 最近一次传感器来源："real" / "mock"
+        self._sensor_updated_at = 0.0   # 最近一次传感器更新时间戳
+        self._last_camera_frame_at = 0.0  # 最近一次成功取到摄像头画面的时间
         self._periodic_thread = None
         self._periodic_stop = threading.Event()
         self._audio_pipeline = None
@@ -140,10 +144,13 @@ class Bridge:
 
     def on_sensor_data(self, packet: SensorPacket):
         """
-        传感器数据到达时调用。
-        格式化成自然语言文字，推给 A 层直接读取。
+        真实传感器数据到达时调用（机器狗 / 机械臂 / 手机等）。
+        格式化成自然语言文字，供 A 层读取，并标记为真实来源。
         """
         text = self.format_sensor_text(packet)
+        self._latest_sensor_text = text
+        self._sensor_source = "real"
+        self._sensor_updated_at = time.time()
         _log_event(text)
         if self._agent_callback:
             self._agent_callback(text)
@@ -187,12 +194,27 @@ class Bridge:
             )
         return "\n".join(lines)
 
-    def get_recent_vision(self, limit: int = 3) -> str:
+    def note_camera_frame(self, ts: float):
+        """记录一次成功取帧时间（定时抓帧或用户主动看摄像头时调用）"""
+        if ts > 0:
+            self._last_camera_frame_at = ts
+
+    def has_live_camera(self, max_age: float = 600.0) -> bool:
+        """摄像头在 max_age 秒内成功取到过画面（不要求画面有变化）"""
+        return (self._last_camera_frame_at > 0
+                and time.time() - self._last_camera_frame_at <= max_age)
+
+    def get_recent_vision(self, limit: int = 3,
+                          max_age: Optional[float] = None) -> str:
         """
         获取最近 N 条视觉记忆，按时间倒序。
         用于 A 层上下文注入，不需要关键词匹配。
+        max_age: 只保留 N 秒内的记录；None 表示不限时间。
         """
         results = self._store.get_recent(limit=limit)
+        if max_age is not None:
+            results = [r for r in results
+                       if self._is_fresh(r.get("timestamp"), max_age)]
         if not results:
             return ""
 
@@ -226,7 +248,13 @@ class Bridge:
             self._sensor_stream = MockSensorStream(interval=30)
 
             def _on_packet(packet):
+                # 真实传感器仍在活跃时，不让模拟数据覆盖它
+                if (self._sensor_source == "real"
+                        and time.time() - self._sensor_updated_at <= 120):
+                    return
                 self._latest_sensor_text = self.format_sensor_text(packet)
+                self._sensor_source = "mock"
+                self._sensor_updated_at = time.time()
 
             self._sensor_stream.on_data(_on_packet)
             self._sensor_stream.start()
@@ -318,8 +346,36 @@ class Bridge:
             print(f"[Bridge] 获取当前位置失败: {e}")
             return ""
 
-    def get_current_sensor_text(self) -> str:
-        """获取最近一次传感器数据格式化文本"""
+    @staticmethod
+    def _is_fresh(ts, max_age: float) -> bool:
+        """判断 ISO 时间戳是否在 max_age 秒内"""
+        if not ts:
+            return False
+        try:
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - dt).total_seconds() <= max_age
+        except Exception:
+            return False
+
+    def has_real_sensor(self, max_age: float = 180.0) -> bool:
+        """是否有 max_age 秒内的真实传感器数据"""
+        return (self._sensor_source == "real"
+                and self._sensor_updated_at > 0
+                and time.time() - self._sensor_updated_at <= max_age)
+
+    def get_current_sensor_text(self, real_only: bool = False,
+                                max_age: float = 180.0) -> str:
+        """
+        获取最近一次传感器数据格式化文本。
+        real_only=True 时只返回 max_age 秒内的真实传感器数据；
+        模拟数据与过期数据一律返回空字符串。
+        """
+        if real_only:
+            if not self.has_real_sensor(max_age):
+                return ""
+            return self._latest_sensor_text
         if self._latest_sensor_text:
             return self._latest_sensor_text
         if self._sensor_stream:
@@ -354,6 +410,7 @@ class Bridge:
                     from .vision_pipeline import VisionPipeline
                     vp = VisionPipeline(phone_sensor=self._phone_sensor)
                     result = vp.run_once()
+                    self.note_camera_frame(getattr(vp, "_last_frame_at", 0))
                     if result and result.persons:
                         names = [p.get("name", "?") for p in result.persons]
                         _log_event(f"[定时视觉] 检测到人物: {', '.join(names)}")

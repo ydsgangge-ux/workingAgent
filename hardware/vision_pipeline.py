@@ -53,6 +53,7 @@ class VisionPipeline:
         self._phone_sensor = phone_sensor  # PhoneSensorClient，按需获取 GPS
         self._image_mgr = None  # 延迟初始化 ImageManager
         self._last_img_bytes: Optional[bytes] = None  # 保留当前帧用于存图
+        self._last_frame_at: float = 0.0               # 最近一次成功取到画面的时间
 
     # ── 主入口 ────────────────────────────────────────
 
@@ -79,6 +80,7 @@ class VisionPipeline:
 
         # 保留当前帧用于后续存图
         self._last_img_bytes = img_bytes
+        self._last_frame_at = time.time()
 
         # ── 变化检测 ──
         if not force:

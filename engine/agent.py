@@ -386,6 +386,7 @@ class ConsciousnessAgent:
                 from hardware.vision_pipeline import VisionPipeline
                 _vp = VisionPipeline()
                 result = _vp.run_once(force=True)
+                self.bridge.note_camera_frame(getattr(_vp, "_last_frame_at", 0))
                 if result:
                     live_vision_detail = self._describe_visual_memory(result)
                     self._log("视觉触发", f"实时精细分析完成: {result.description[:60]}")
@@ -394,19 +395,23 @@ class ConsciousnessAgent:
             except Exception as e:
                 self._log("视觉触发", f"实时分析失败: {e}")
         simlife_context = ""
-        has_real_vision = self.bridge is not None
+        # 只有真实传感器/真实视觉才算"真实感知"，模拟数据不算
+        has_real_vision = False
 
-        if has_real_vision:
-            # ── 有真实视觉：用真实感知，屏蔽 SimLife 虚拟模拟 ──
+        if self.bridge:
+            camera_live = False
             vm_summary = ""
             try:
-                vm_summary = self.bridge.get_recent_vision(limit=3)
+                camera_live = self.bridge.has_live_camera()
+                # 摄像头在线时沿用最近一次视觉记忆；离线才限制在 10 分钟内
+                vm_summary = self.bridge.get_recent_vision(
+                    limit=3, max_age=None if camera_live else 600)
             except Exception:
                 pass
 
             sensor_text = ""
             try:
-                sensor_text = self.bridge.get_current_sensor_text()
+                sensor_text = self.bridge.get_current_sensor_text(real_only=True)
             except Exception:
                 pass
 
@@ -420,6 +425,7 @@ class ConsciousnessAgent:
                 parts.append(f"【你此刻看到的真实画面】\n{vm_summary}")
 
             if parts:
+                has_real_vision = True
                 simlife_context = "\n\n".join(parts)
                 simlife_context += (
                     "\n\n（你是一个有真实感知的个体，以上是你的传感器和摄像头实时数据。"
@@ -428,8 +434,7 @@ class ConsciousnessAgent:
                 )
                 self._log("真实感知", f"视觉+传感器已注入 ({len(simlife_context)}字)")
             else:
-                self._log("真实感知", "bridge 可用但无数据，降级到 SimLife")
-                has_real_vision = False
+                self._log("真实感知", "无真实传感器/视觉数据，回退到 SimLife")
 
         if not has_real_vision and self.simlife:
             # ── 无真实视觉：SimLife 虚拟生活 ──
@@ -1431,18 +1436,22 @@ class ConsciousnessAgent:
         # 5. 生活状态（真实感知 或 SimLife）
         if self.bridge:
             try:
-                sensor_text = self.bridge.get_current_sensor_text()
+                sensor_text = self.bridge.get_current_sensor_text(real_only=True)
                 if sensor_text and "暂不可用" not in sensor_text:
                     triggers.append(("hardware", f"传感器状态: {sensor_text}"))
             except Exception:
                 pass
             try:
-                vm = self.bridge.get_recent_vision(limit=3)
+                camera_live = self.bridge.has_live_camera()
+                vm = self.bridge.get_recent_vision(
+                    limit=3, max_age=None if camera_live else 600)
                 if vm:
                     triggers.append(("hardware_vision", vm[:400]))
             except Exception:
                 pass
-        elif self.simlife:
+        # bridge 存在但没有真实感知数据时，仍可用 SimLife 找话题
+        if (self.simlife
+                and not any(t[0] in ("hardware", "hardware_vision") for t in triggers)):
             try:
                 simlife_text = self.simlife.format_for_prompt()
                 if simlife_text:
