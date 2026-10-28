@@ -587,12 +587,100 @@ def _is_official_host(url: str) -> bool:
         return False
 
 
+def _deepseek_tools_enabled() -> bool:
+    """主模型配置为 DeepSeek 时，启用官方 Search / Fetch 接口"""
+    try:
+        from desktop.config import load_config
+        cfg = load_config()
+    except Exception:
+        return False
+    if "deepseek" not in str(cfg.get("api_provider", "")).lower():
+        return False
+    return bool(str(cfg.get("api_key", "")).strip())
+
+
+def _deepseek_post(path: str, payload: dict, timeout: float) -> Optional[dict]:
+    """调用 DeepSeek 工具接口（Bearer 鉴权，原始 JSON）"""
+    try:
+        from desktop.config import load_config
+        api_key = str(load_config().get("api_key", "")).strip()
+    except Exception:
+        return None
+    if not api_key:
+        return None
+    req = urllib.request.Request(
+        f"https://api.deepseek.com{path}",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def _deepseek_search(query: str, count: int) -> Optional[Dict]:
+    """DeepSeek Search；未启用或失败时返回 None，由调用方回退本地搜索"""
+    if not _deepseek_tools_enabled():
+        return None
+    q = (query or "").strip()[:128]
+    if not q:
+        return None
+    try:
+        data = _deepseek_post(
+            "/v1/tools/search",
+            {"query": q, "count": max(1, min(50, int(count))), "need_content": False},
+            timeout=20,
+        )
+    except Exception as e:
+        print(f"[DeepSeek Search] 调用失败，回退本地搜索: {e}")
+        return None
+
+    results = []
+    for r in (data or {}).get("results") or []:
+        results.append({
+            "title":    r.get("title") or "",
+            "url":      r.get("url") or "",
+            "snippet":  r.get("snippet") or "",
+            "summary":  r.get("summary") or "",
+            "date":     r.get("date"),
+            "site_name": r.get("site_name"),
+            "authority": r.get("authority"),
+            "score":    r.get("rerank_score"),
+        })
+    if not results:
+        return None
+    return {"engine": "DeepSeek Search", "results": results}
+
+
+def _deepseek_fetch(url: str) -> Optional[Dict]:
+    """DeepSeek Fetch，返回 Markdown 正文；未启用或失败时返回 None"""
+    if not _deepseek_tools_enabled():
+        return None
+    u = (url or "").strip()[:8192]
+    if not u.startswith(("http://", "https://")):
+        return None
+    try:
+        data = _deepseek_post("/v1/tools/fetch", {"url": u}, timeout=25)
+    except Exception as e:
+        print(f"[DeepSeek Fetch] 调用失败，回退本地抓取: {e}")
+        return None
+
+    content = (data or {}).get("content") or ""
+    if not content:
+        return None
+    return {"title": (data or {}).get("title") or "", "content": content}
+
+
 @register_tool(
     name="web_search",
     description=(
-        "搜索网络信息（DuckDuckGo 备用 Bing）。结果会被优先排序并标注官网/官方文档(如 docs.* / *.cn / 权威域名)。"
+        "搜索网络信息。配置 DeepSeek 时优先使用 DeepSeek 官方 Search（rerank 排序 + 长摘要），"
+        "不可用时自动回退 DuckDuckGo / Bing。结果会被优先排序并标注官网/官方文档(如 docs.* / *.cn / 权威域名)。"
         "命中官网或官方数据源后，请立即用 fetch_url / browser_action 抓取该页一手数据，不要再反复盲搜。"
-        "exact=true 时用精确短语(bing引号)重搜，常用于官网列名、型号名等需要精确匹配的场景。"
+        "exact=true 时用精确短语重搜，常用于官网列名、型号名等需要精确匹配的场景。"
     ),
     parameters={
         "query": {"type": "string", "description": "搜索关键词", "required": True},
@@ -619,6 +707,12 @@ def web_search(query: str, max_results: int = 5, exact: bool = False) -> Dict:
         return {"ok": True, "engine": engine, "query": query,
                 "results": results[:max_results],
                 "note": "命中官网/官方数据源时请用 fetch_url / browser_action 抓一手数据，避免仅依赖摘要"}
+
+    # ── 方式0：DeepSeek 官方 Search（主模型为 DeepSeek 时优先）──
+    ds = _deepseek_search(
+        query if not exact else f'"{query.strip(chr(34))}"', max_results)
+    if ds:
+        return _finalize(ds["results"], ds["engine"])
 
     # ── 方式1：DuckDuckGo Instant Answer API ──
     try:
@@ -690,7 +784,7 @@ def web_search(query: str, max_results: int = 5, exact: bool = False) -> Dict:
 
 @register_tool(
     name="fetch_url",
-    description="获取指定 URL 的网页内容（纯文本）。结果直接返回在 content 字段中，不会写入任何文件，请直接使用返回的数据",
+    description="获取指定 URL 的网页内容。配置 DeepSeek 时优先使用官方 Fetch 接口（返回干净的 Markdown 正文），不可用时回退本地抓取。结果直接返回在 content 字段中，不会写入任何文件，请直接使用",
     parameters={
         "url": {"type": "string", "description": "目标 URL", "required": True},
         "max_chars": {"type": "integer", "description": "最大字符数，默认 8000"}
@@ -698,6 +792,18 @@ def web_search(query: str, max_results: int = 5, exact: bool = False) -> Dict:
     risk="low"
 )
 def fetch_url(url: str, max_chars: int = 8000) -> Dict:
+    # ── 方式0：DeepSeek 官方 Fetch（主模型为 DeepSeek 时优先）──
+    page = _deepseek_fetch(url)
+    if page:
+        text = page["content"]
+        return {
+            "ok": True,
+            "url": url,
+            "title": page["title"],
+            "content": text[:max_chars],
+            "total_length": len(text),
+            "engine": "DeepSeek Fetch",
+        }
     try:
         req = urllib.request.Request(
             url,
