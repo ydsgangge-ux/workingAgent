@@ -11,6 +11,7 @@ wecom_bot.py
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 
 from wecom_aibot_sdk import WSClient, generate_req_id
@@ -73,9 +74,16 @@ class WecomBot:
         self._bot_id = bot_id or config.get("bot_id", "")
         self._secret = secret or config.get("secret", "")
         self._client = None
+        self._loop = None
+        self._pending_confirm = {}      # uid -> {event, result}
+        self._confirm_lock = threading.Lock()
+
+    CONFIRM_TIMEOUT = 90      # 高风险操作确认等待上限（秒），超时自动拒绝
 
     async def start(self):
         """启动企业微信长连接"""
+        import asyncio as _asyncio
+        self._loop = _asyncio.get_running_loop()
         if not self._bot_id or not self._secret:
             print("[WecomBot] 未配置 bot_id/secret，跳过启动")
             print("[WecomBot] 可以在 ha_config.json 或 GUI 设置中添加: wecom_bot_id / wecom_bot_secret")
@@ -110,6 +118,21 @@ class WecomBot:
             print(f"[WecomBot] 收到消息: {content[:80]}")
             print(f"[WecomBot]  来自={wecom_uid}  chatid={chatid}  msgid={msgid}")
 
+            # 高风险操作确认优先：y / n 直接回复，不再进入 agent
+            if wecom_uid:
+                handled, verdict = self._resolve_pending_confirm(wecom_uid, content)
+                if handled:
+                    if verdict is None:
+                        tip = "请回复 y 允许 / n 拒绝（确认结束后再发其他指令）"
+                    else:
+                        tip = "✅ 已允许执行" if verdict else "🚫 已拒绝执行"
+                    try:
+                        await self._client.reply_stream(
+                            frame, generate_req_id("stream"), tip, finish=True)
+                    except Exception:
+                        pass
+                    return
+
             # 第一步：立刻发占位消息（企业微信要求5秒内必须回复）
             import asyncio as _asyncio
             stream_id = generate_req_id("stream")
@@ -123,11 +146,20 @@ class WecomBot:
             # 第二步：调用 A 层（可能耗时较久，但5秒限制已用占位消息绕过）
             try:
                 wecom_uname = f"企微_{wecom_uid}" if wecom_uid else ""
-                result = await _asyncio.to_thread(
-                    self._agent.process, content,
-                    override_uid=f"wecom_{wecom_uid}" if wecom_uid else "",
-                    override_uname=wecom_uname,
-                )
+
+                def _work():
+                    from engine.executor import temp_confirm
+                    with temp_confirm(
+                        lambda name, params: self._channel_confirm(
+                            chatid, wecom_uid, name, params)
+                    ):
+                        return self._agent.process(
+                            content,
+                            override_uid=f"wecom_{wecom_uid}" if wecom_uid else "",
+                            override_uname=wecom_uname,
+                        )
+
+                result = await _asyncio.to_thread(_work)
                 reply = (
                     result.get("response")
                     or result.get("reply")
@@ -197,3 +229,75 @@ class WecomBot:
                 print(f"[WecomBot] 连接异常: {e}")
             print(f"[WecomBot] 连接断开，5秒后重连...")
             await _asyncio.sleep(5)
+
+    # ── 高风险操作确认（企微里回复 y / n）──────────────
+    def _resolve_pending_confirm(self, uid: str, text: str):
+        """返回 (是否已消费该消息, 判定结果 True/False/None)"""
+        with self._confirm_lock:
+            entry = self._pending_confirm.get(uid)
+        if not entry or entry["event"].is_set():
+            return False, None
+
+        ans = (text or "").strip().lower()
+        yes = {"y", "yes", "是", "允许", "同意", "可以", "好", "ok", "确认", "执行"}
+        no = {"n", "no", "否", "拒绝", "不要", "不行", "取消", "停止"}
+        if ans in yes:
+            entry["result"] = True
+            entry["event"].set()
+            return True, True
+        if ans in no:
+            entry["result"] = False
+            entry["event"].set()
+            return True, False
+        return True, None
+
+    def _channel_confirm(self, chatid: str, uid: str,
+                         tool_name: str, params: dict) -> bool:
+        # 没有会话上下文就无法把确认发出去，直接拒绝，避免空等
+        if not chatid:
+            print(f"[WecomBot] 缺少 chatid，自动拒绝高风险操作：{tool_name}")
+            return False
+
+        entry = {"event": threading.Event(), "result": None}
+        with self._confirm_lock:
+            self._pending_confirm[uid or chatid] = entry
+
+        ok = False
+        try:
+            summary = json.dumps(params, ensure_ascii=False)
+            if len(summary) > 600:
+                summary = summary[:600] + "…"
+            self._send_text(
+                chatid,
+                f"⚠️ 需要你的许可\n"
+                f"工具：{tool_name}\n参数：{summary}\n\n"
+                f"回复 y 允许 / n 拒绝（{self.CONFIRM_TIMEOUT} 秒未回复自动拒绝）",
+            )
+            entry["event"].wait(self.CONFIRM_TIMEOUT)
+            ok = bool(entry["result"])
+        finally:
+            with self._confirm_lock:
+                self._pending_confirm.pop(uid or chatid, None)
+            if entry["result"] is None:
+                self._send_text(chatid, f"⏱️ 确认超时，已自动拒绝：{tool_name}")
+            else:
+                self._send_text(
+                    chatid, "✅ 已允许执行" if entry["result"] else "🚫 已拒绝执行")
+        print(f"[WecomBot] 高风险确认 {tool_name} → {ok}")
+        return ok
+
+    def _send_text(self, chatid: str, text: str):
+        """从 worker 线程向企微主事件循环投递一条主动消息"""
+        if not self._loop or not self._client:
+            return
+        try:
+            import asyncio
+            asyncio.run_coroutine_threadsafe(
+                self._client.send_message(chatid, {
+                    "msgtype": "text",
+                    "text": {"content": text},
+                }),
+                self._loop,
+            )
+        except Exception as e:
+            print(f"[WecomBot] 确认消息发送失败: {e}")

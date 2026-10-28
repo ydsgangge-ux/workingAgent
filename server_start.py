@@ -110,6 +110,14 @@ executor = BLayerExecutor(
     verbose=True
 )
 
+# 注入高风险操作确认：网页弹窗（90 秒未确认自动拒绝）
+try:
+    from hardware.web_confirm import request_confirm
+    executor.confirm = lambda tool_name, params: request_confirm(
+        tool_name, params, timeout=90)
+except Exception as e:
+    print(f"[WebConfirm] 高风险确认注入失败: {e}")
+
 # 注入用户文本采集回调：B 层 ask_user_input 通过 web 弹窗采集
 try:
     from hardware.web_confirm import request_user_input

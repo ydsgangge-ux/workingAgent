@@ -248,6 +248,8 @@ class QQBot:
     """把 QQ（OneBot 11）消息桥接到 agent.process()"""
 
     TEXT_LIMIT = 900          # 单条文本上限（QQ 长消息容易发送失败）
+    CONFIRM_TIMEOUT = 90      # 高风险操作确认等待上限（秒），超时自动拒绝
+    ATTACHMENT_WAIT = 20.0    # 附件先到、指令未到时的等待窗口（秒）
 
     def __init__(self, agent, cfg: Optional[dict] = None):
         self._agent = agent
@@ -256,11 +258,13 @@ class QQBot:
                                     self._cfg.get("qq_access_token", ""))
         self._allowed = _parse_ids(self._cfg.get("qq_allowed_uids", ""))
         self._groups = _parse_ids(self._cfg.get("qq_group_whitelist", ""))
-        self._tmpdir = Path(os.environ.get("TEMP", "/tmp")) / "workingagent_qq"
-        self._tmpdir.mkdir(parents=True, exist_ok=True)
         self._user_locks = {}
         self._lock_guard = threading.Lock()
         self._thread = None
+        from engine.attachment_buffer import PendingAttachments
+        self._pending_attachments = PendingAttachments(self.ATTACHMENT_WAIT)
+        self._pending_confirm = {}          # key -> {event, result}
+        self._confirm_lock = threading.Lock()
 
     def set_agent(self, agent):
         """引擎重载时更新 agent 引用，无需重连 QQ"""
@@ -320,19 +324,54 @@ class QQBot:
         sender = ev.get("sender") or {}
         uname = (sender.get("card") or sender.get("nickname") or user_id).strip()
 
-        # 占位回复，避免用户以为没响应
-        self._reply(kind, target, "正在思考…", at_user=user_id if kind == "group" else "")
-
-        attachment, text = self._collect(segs)
-        user_input = " ".join([p for p in (attachment, text) if p]).strip() or "请分析以上内容"
-
         uid = f"qq_group{group_id}_{user_id}" if kind == "group" else f"qq_{user_id}"
-        try:
-            result = self._agent.process(
-                user_input,
-                override_uid=uid,
-                override_uname=f"QQ_{uname}"[:40],
+        self._handle_message(kind, target, user_id, uname, uid, segs)
+
+    def _handle_message(self, kind: str, target: str, user_id: str,
+                        uname: str, uid: str, segs: list):
+        attachment, text = self._collect(segs)
+
+        # ① 高风险操作确认：y / n 优先消费，避免被当成新任务
+        if self._resolve_pending_confirm(kind, target, user_id, text):
+            return
+
+        # ② 只有附件、没带文字：先暂存，等用户下一句指令再一起提交
+        if (attachment and not text
+                and ("[文件:" in attachment or "[图片:" in attachment)):
+            self._pending_attachments.hold(
+                uid,
+                attachment,
+                lambda att: self._run_and_reply(kind, target, user_id, uname, att),
             )
+            self._reply(kind, target, "文件已收到，要我怎么处理？直接发指令即可。",
+                        at_user=user_id if kind == "group" else "")
+            return
+
+        # ③ 文字到达：若刚发过附件，合并成一条任务
+        held = self._pending_attachments.take(uid)
+        user_input = " ".join(p for p in (held, attachment, text) if p).strip()
+        if not user_input:
+            user_input = "请分析以上内容"
+        self._run_and_reply(kind, target, user_id, uname, user_input)
+
+    def _run_and_reply(self, kind: str, target: str, user_id: str,
+                       uname: str, user_input: str):
+        at_user = user_id if kind == "group" else ""
+        self._reply(kind, target, "正在思考…", at_user=at_user)
+
+        uid = (f"qq_group{target}_{user_id}" if kind == "group"
+               else f"qq_{user_id}")
+        try:
+            from engine.executor import temp_confirm
+            with temp_confirm(
+                lambda name, params: self._channel_confirm(
+                    kind, target, user_id, name, params)
+            ):
+                result = self._agent.process(
+                    user_input,
+                    override_uid=uid,
+                    override_uname=f"QQ_{uname}"[:40],
+                )
             reply = (result.get("response") or result.get("reply")
                      or result.get("text") or "好的，我知道了。")
         except Exception as e:
@@ -342,8 +381,69 @@ class QQBot:
         reply = self._deliver(kind, target, reply)
         if not reply.strip():
             reply = "（已完成）"
-        self._reply(kind, target, reply,
-                    at_user=user_id if kind == "group" else "")
+        self._reply(kind, target, reply, at_user=at_user)
+
+    # ── 高风险操作确认（QQ 里回复 y / n）──────────────
+    def _resolve_pending_confirm(self, kind: str, target: str,
+                                 user_id: str, text: str) -> bool:
+        key = f"{kind}:{target}:{user_id}"
+        with self._confirm_lock:
+            entry = self._pending_confirm.get(key)
+        if not entry or entry["event"].is_set():
+            return False
+
+        ans = (text or "").strip().lower()
+        yes = {"y", "yes", "是", "允许", "同意", "可以", "好", "ok", "确认", "执行"}
+        no = {"n", "no", "否", "拒绝", "不要", "不行", "取消", "停止"}
+        if ans in yes:
+            entry["result"] = True
+        elif ans in no:
+            entry["result"] = False
+        else:
+            self._reply(kind, target,
+                        "请回复 y 允许 / n 拒绝（确认结束后再发其他指令）",
+                        at_user=user_id if kind == "group" else "")
+            return True
+        entry["event"].set()
+        return True
+
+    def _channel_confirm(self, kind: str, target: str, user_id: str,
+                         tool_name: str, params: dict) -> bool:
+        key = f"{kind}:{target}:{user_id}"
+        at_user = user_id if kind == "group" else ""
+        entry = {"event": threading.Event(), "result": None}
+        with self._confirm_lock:
+            self._pending_confirm[key] = entry
+
+        ok = False
+        try:
+            summary = json.dumps(params, ensure_ascii=False)
+            if len(summary) > 600:
+                summary = summary[:600] + "…"
+            group_hint = "（群里请 @我 后回复）" if kind == "group" else ""
+            self._reply(
+                kind, target,
+                f"⚠️ 需要你的许可\n"
+                f"工具：{tool_name}\n参数：{summary}\n\n"
+                f"回复 y 允许 / n 拒绝{group_hint}"
+                f"（{self.CONFIRM_TIMEOUT} 秒未回复自动拒绝）",
+                at_user=at_user,
+            )
+            entry["event"].wait(self.CONFIRM_TIMEOUT)
+            ok = bool(entry["result"])
+        finally:
+            with self._confirm_lock:
+                self._pending_confirm.pop(key, None)
+            if entry["result"] is None:
+                self._reply(kind, target,
+                            f"⏱️ 确认超时，已自动拒绝：{tool_name}",
+                            at_user=at_user)
+            else:
+                self._reply(kind, target,
+                            "✅ 已允许执行" if entry["result"] else "🚫 已拒绝执行",
+                            at_user=at_user)
+        print(f"[QQBot] 高风险确认 {tool_name} → {ok}")
+        return ok
 
     # ── 消息解析 ───────────────────────────────────────
     @staticmethod
@@ -393,19 +493,24 @@ class QQBot:
     def _save_image(self, data: dict) -> Optional[Path]:
         url = data.get("url") or ""
         local = data.get("file") or ""
-        if not url and not local:
+        b64 = data.get("base64") or ""
+        if not url and not local and not b64:
             # 只有 file_id 的情况，向 OneBot 查询
             q = self._client.call("get_image", {"file": data.get("file_id") or local})
             info = (q.get("data") or {})
             url = info.get("url") or ""
             local = info.get("file") or info.get("path") or ""
+            b64 = info.get("base64") or ""
+        if b64 and not url and not local:
+            return self._save_base64(b64, "img.png")
         return self._save_media(url, local, "img", "png")
 
     def _save_file(self, data: dict) -> Optional[Path]:
         url = data.get("url") or ""
         local = data.get("file") or ""
+        b64 = data.get("base64") or ""
         name = data.get("file_name") or data.get("name") or data.get("file") or "file"
-        if not url and (data.get("file_id") or local):
+        if not url and not local and not b64 and (data.get("file_id") or local):
             q = self._client.call("get_file", {
                 "file_id": data.get("file_id") or "",
                 "file": data.get("file") or "",
@@ -413,29 +518,43 @@ class QQBot:
             info = (q.get("data") or {})
             url = info.get("url") or ""
             local = info.get("file") or info.get("path") or ""
+            b64 = info.get("base64") or ""
             name = info.get("file_name") or info.get("name") or name
+        if b64 and not url and not local:
+            return self._save_base64(b64, name)
         return self._save_media(url, local, "file", "", name)
+
+    @staticmethod
+    def _save_base64(b64: str, name: str) -> Optional[Path]:
+        try:
+            from engine.inbox import save_bytes
+            if "," in b64:
+                b64 = b64.split(",", 1)[1]
+            return save_bytes(base64.b64decode(b64), name)
+        except Exception as e:
+            print(f"[QQBot] base64 附件保存失败: {e}")
+            return None
 
     def _save_media(self, url: str, local: str, prefix: str,
                     default_ext: str, name: str = "") -> Optional[Path]:
         try:
-            base = Path(local) if local else None
+            from engine.inbox import save_bytes
+            base = Path(local.replace("file:///", "").replace("file://", "")) if local else None
             if base and base.is_file():
                 data = base.read_bytes()
-                ext = base.suffix.lstrip(".") or default_ext
-                fname = base.name
+                fname = name or base.name
             elif url.startswith("http"):
                 r = requests.get(url, timeout=30)
                 r.raise_for_status()
                 data = r.content
-                ext = (Path(url.split("?")[0]).suffix.lstrip(".") or default_ext)
-                fname = Path(url.split("?")[0]).name or f"{prefix}.{ext}"
+                fname = name or Path(url.split("?")[0]).name or f"{prefix}.{default_ext}"
+                if not Path(fname).suffix and default_ext:
+                    fname = f"{fname}.{default_ext}"
             else:
+                print(f"[QQBot] 附件保存失败：NapCat 未返回可下载地址 "
+                      f"（file={local or '-'}）")
                 return None
-            safe = re.sub(r"[^\w.\-\u4e00-\u9fff]", "_", fname) or f"{prefix}.{ext}"
-            dst = self._tmpdir / f"{int(time.time() * 1000)}_{safe}"
-            dst.write_bytes(data)
-            return dst
+            return save_bytes(data, fname)
         except Exception as e:
             print(f"[QQBot] 媒体保存失败: {e}")
             return None

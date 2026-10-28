@@ -259,8 +259,13 @@ class LarkBot:
         self._secret = app_secret or config.get("app_secret", "")
         self._base_url = base_url or os.environ.get("LARK_BASE_URL", "https://open.feishu.cn")
         self._http = None
-        self._tmpdir = Path(os.environ.get("TEMP", "/tmp")) / "workingagent_lark"
-        self._tmpdir.mkdir(parents=True, exist_ok=True)
+        from engine.attachment_buffer import PendingAttachments
+        self._pending_attachments = PendingAttachments(self.ATTACHMENT_WAIT)
+        self._pending_confirm = {}          # key -> {event, result}
+        self._confirm_lock = threading.Lock()
+
+    CONFIRM_TIMEOUT = 90      # 高风险操作确认等待上限（秒），超时自动拒绝
+    ATTACHMENT_WAIT = 20.0    # 附件先到、指令未到时的等待窗口（秒）
 
     # ── 入口 ─────────────────────────────────────
     def start(self):
@@ -337,16 +342,145 @@ class LarkBot:
         ).start()
 
     def _handle(self, message_id, chat_id, message_type, content, sender_id):
-        # 立刻回占位，避免等待 AI 期间用户以为没应答
+        key = f"lark:{sender_id or chat_id}"
+        text = (content.get("text") or "").strip() if message_type == "text" else ""
+
+        # ① 高风险操作确认：y / n 优先消费
+        if message_type == "text" and self._resolve_pending_confirm(
+                message_id, chat_id, sender_id, text):
+            return
+
+        # ② 文件/图片：先暂存，等用户下一句指令一起提交
+        if message_type in ("file", "image"):
+            attachment, err = self._download_attachment(
+                message_id, message_type, content)
+            if err:
+                self._http.reply_text(message_id, err)
+                return
+            self._pending_attachments.hold(
+                key, attachment,
+                lambda att: self._run_and_reply(
+                    message_id, chat_id, sender_id, att),
+            )
+            self._http.reply_text(message_id, "文件已收到，要我怎么处理？直接发指令即可。")
+            return
+
+        if message_type != "text":
+            self._http.reply_text(message_id, "暂时只支持文本、文件、图片消息哦。")
+            return
+
+        # ③ 文字到达：合并刚收到的附件
+        held = self._pending_attachments.take(key)
+        user_input = " ".join(p for p in (held, text) if p).strip()
+        if not user_input:
+            user_input = "请分析以上内容"
+        self._run_and_reply(message_id, chat_id, sender_id, user_input)
+
+    def _download_attachment(self, message_id, message_type, content):
+        """下载附件到统一 inbox，返回 (附件标记, 错误信息)"""
+        from engine.inbox import save_bytes
+        if message_type == "file":
+            file_key = content.get("file_key", "")
+            data = self._http.download(message_id, file_key, "file") if file_key else None
+            if data is None:
+                return "", "文件下载失败，请稍后再试。"
+            fname = (content.get("file_name") or "file").strip() or "file"
+            path = save_bytes(data, fname)
+            if not path:
+                return "", "文件保存失败，请稍后再试。"
+            return f"[文件:{path}]", ""
+        else:
+            image_key = content.get("image_key", "")
+            data = self._http.download(message_id, image_key, "image") if image_key else None
+            if data is None:
+                return "", "图片下载失败，请稍后再试。"
+            path = save_bytes(
+                data, f"img_{int(time.time())}_{hash(image_key) & 0xffff}.png")
+            if not path:
+                return "", "图片保存失败，请稍后再试。"
+            return f"[图片:{path}]", ""
+
+    def _run_and_reply(self, message_id, chat_id, sender_id, user_input):
         self._http.reply_text(message_id, "正在思考…")
+        lark_uid = f"lark_{sender_id}" if sender_id else ""
         try:
-            reply = self._run_agent(message_id, message_type, content, sender_id)
+            from engine.executor import temp_confirm
+            with temp_confirm(
+                lambda name, params: self._channel_confirm(
+                    message_id, chat_id, sender_id, name, params)
+            ):
+                result = self._agent.process(
+                    user_input,
+                    override_uid=lark_uid,
+                    override_uname=f"飞书_{sender_id[:6]}" if sender_id else "",
+                )
+            reply = (
+                result.get("response")
+                or result.get("reply")
+                or result.get("text")
+                or "好的，我知道了。"
+            )
         except Exception as e:
             print(f"[LarkBot] 处理异常: {e}")
             reply = f"抱歉，我遇到了一点问题：{e}"
         # 若回应带 [download:...]/[image:...] 标记，把文件/图片上传发送到飞书并从文本移除
         reply = self._deliver(chat_id, reply)
         self._http.reply_text(message_id, reply)
+
+    # ── 高风险操作确认（飞书里回复 y / n）──────────────
+    def _resolve_pending_confirm(self, message_id, chat_id, sender_id, text) -> bool:
+        key = f"lark:{sender_id or chat_id}"
+        with self._confirm_lock:
+            entry = self._pending_confirm.get(key)
+        if not entry or entry["event"].is_set():
+            return False
+
+        ans = (text or "").strip().lower()
+        yes = {"y", "yes", "是", "允许", "同意", "可以", "好", "ok", "确认", "执行"}
+        no = {"n", "no", "否", "拒绝", "不要", "不行", "取消", "停止"}
+        if ans in yes:
+            entry["result"] = True
+            entry["event"].set()
+        elif ans in no:
+            entry["result"] = False
+            entry["event"].set()
+        else:
+            self._http.reply_text(
+                message_id, "请回复 y 允许 / n 拒绝（确认结束后再发其他指令）")
+        return True
+
+    def _channel_confirm(self, message_id, chat_id, sender_id,
+                         tool_name, params) -> bool:
+        key = f"lark:{sender_id or chat_id}"
+        entry = {"event": threading.Event(), "result": None}
+        with self._confirm_lock:
+            self._pending_confirm[key] = entry
+
+        ok = False
+        try:
+            summary = json.dumps(params, ensure_ascii=False)
+            if len(summary) > 600:
+                summary = summary[:600] + "…"
+            self._http.reply_text(
+                message_id,
+                f"⚠️ 需要你的许可\n"
+                f"工具：{tool_name}\n参数：{summary}\n\n"
+                f"回复 y 允许 / n 拒绝（{self.CONFIRM_TIMEOUT} 秒未回复自动拒绝）",
+            )
+            entry["event"].wait(self.CONFIRM_TIMEOUT)
+            ok = bool(entry["result"])
+        finally:
+            with self._confirm_lock:
+                self._pending_confirm.pop(key, None)
+            if entry["result"] is None:
+                self._http.reply_text(
+                    message_id, f"⏱️ 确认超时，已自动拒绝：{tool_name}")
+            else:
+                self._http.reply_text(
+                    message_id,
+                    "✅ 已允许执行" if entry["result"] else "🚫 已拒绝执行")
+        print(f"[LarkBot] 高风险确认 {tool_name} → {ok}")
+        return ok
 
     # ── 交付：解析 [download:文件名:显示名] 与 [image:文件名:显示名] 标记并发送 ──
     def _deliver(self, chat_id: str, text: str) -> str:
@@ -383,51 +517,3 @@ class LarkBot:
             else:
                 cleaned += f"\n（图片无法在飞书发送，本地路径：{src}）"
         return cleaned
-
-    # ── 构造输入并调 agent ───────────────────────
-    def _run_agent(self, message_id, message_type, content, sender_id):
-        attachment = ""
-        user_text = ""
-
-        if message_type == "text":
-            user_text = (content.get("text") or "").strip()
-
-        elif message_type == "file":
-            file_key = content.get("file_key", "")
-            bytes_ = self._http.download(message_id, file_key, "file") if file_key else None
-            if bytes_ is None:
-                return "文件下载失败，请稍后再试。"
-            # 用消息里的文件名(带后缀)保存，方便 office_tools 识别类型
-            fname = (content.get("file_name") or "file").strip()
-            path = self._tmpdir / f"{int(time.time())}_{os.path.basename(fname or 'file')}"
-            path.write_bytes(bytes_)
-            attachment = f"[文件:{path}]"
-
-        elif message_type == "image":
-            image_key = content.get("image_key", "")
-            bytes_ = self._http.download(message_id, image_key, "image") if image_key else None
-            if bytes_ is None:
-                return "图片下载失败，请稍后再试。"
-            path = self._tmpdir / f"img_{int(time.time())}_{hash(image_key) & 0xffff}.png"
-            path.write_bytes(bytes_)
-            attachment = f"[图片:{path}]"
-
-        else:
-            return "暂时只支持文本、文件、图片消息哦。"
-
-        # 拼成 agent.process 认识的输入：附件标记 + 用户文字
-        parts = ([attachment] if attachment else []) + ([user_text] if user_text else [])
-        user_input = " ".join(parts).strip() or "请分析以上内容"
-
-        lark_uid = f"lark_{sender_id}" if sender_id else ""
-        result = self._agent.process(
-            user_input,
-            override_uid=lark_uid,
-            override_uname=f"飞书_{sender_id[:6]}" if sender_id else "",
-        )
-        return (
-            result.get("response")
-            or result.get("reply")
-            or result.get("text")
-            or "好的，我知道了。"
-        )

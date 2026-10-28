@@ -85,6 +85,7 @@ ai_notes/
 # ── 本地调试/临时文件 ─────────────────────────
 .trae/
 downloads/
+inbox/
 _cookies.txt
 _login_data.json
 _login_data2.json

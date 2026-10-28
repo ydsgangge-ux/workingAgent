@@ -14,6 +14,7 @@ B 层执行器（升级版）
 
 import json
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional, Callable
 from engine.tools import execute_tool, get_all_schemas, get_tool_risk, TOOL_REGISTRY
@@ -26,6 +27,37 @@ from engine.validator import validate_tool_output
 # 签名：(tool_name, params) -> bool
 # 返回 True 表示允许执行，False 表示拒绝
 ConfirmCallback = Callable[[str, dict], bool]
+
+
+# 渠道级确认覆盖：只对当前线程生效，避免 QQ / 飞书 / 企微 / GUI 互相抢占
+_confirm_local = threading.local()
+
+
+def current_confirm() -> Optional[ConfirmCallback]:
+    """当前线程是否设置了渠道级确认回调"""
+    return getattr(_confirm_local, "fn", None)
+
+
+class temp_confirm:
+    """with 块内为当前线程临时指定高风险确认函数
+
+    用法：
+        with temp_confirm(lambda name, params: channel_ask(...)):
+            agent.process(...)
+    """
+
+    def __init__(self, fn: ConfirmCallback):
+        self._fn = fn
+        self._prev = None
+
+    def __enter__(self):
+        self._prev = getattr(_confirm_local, "fn", None)
+        _confirm_local.fn = self._fn
+        return self
+
+    def __exit__(self, *exc):
+        _confirm_local.fn = self._prev
+        return False
 
 
 def default_confirm(tool_name: str, params: dict) -> bool:
@@ -71,6 +103,10 @@ class BLayerExecutor:
 
         # 是否已经尝试过run_python兜底（每个任务重置）
         self._python_fallback_attempted: bool = False
+
+    def _confirm_fn(self) -> ConfirmCallback:
+        """优先使用当前线程的渠道确认回调，回落到全局 confirm"""
+        return current_confirm() or self.confirm
 
     def _log(self, tag: str, msg: str):
         if self.verbose:
@@ -890,7 +926,7 @@ class BLayerExecutor:
             if name in self._dynamic_tools:
                 dyn_info = self._dynamic_tools[name]
                 self._log("自学习", f"检测到自学习工具：{name}")
-                allowed = self.confirm(
+                allowed = self._confirm_fn()(
                     name,
                     {"说明": f"执行之前自动学习的代码：{dyn_info['description'][:80]}"}
                 )
@@ -900,7 +936,7 @@ class BLayerExecutor:
                 else:
                     result_content = self._execute_dynamic_tool(name)
             else:  # high risk
-                allowed = self.confirm(name, params)
+                allowed = self._confirm_fn()(name, params)
                 if not allowed:
                     result_content = {"ok": False, "error": "用户拒绝执行此高风险操作"}
                     self._log("拒绝", f"{name} 被用户拒绝")

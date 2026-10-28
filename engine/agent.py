@@ -349,7 +349,7 @@ class ConsciousnessAgent:
         interaction_id = str(uuid.uuid4())[:8]
 
         # 预处理：图片/文件附件
-        user_input, file_context = self._preprocess_attachment(user_input)
+        user_input, file_context, attachment_path = self._preprocess_attachment(user_input)
         self._log("输入", user_input[:100])
 
         # 激活与当前话题相关的经历认知（更新 last_activated）
@@ -650,6 +650,9 @@ class ConsciousnessAgent:
                 f"执行者性格：{self.personality.speech_style}\n"
                 f"任务背景：{memory_context[:500]}"
             )
+            # 明确告诉 B 层附件的真实路径（工具需要它，不能只靠截断的上下文猜）
+            if attachment_path:
+                context += f"\n附件文件路径：{attachment_path}"
 
             # 技能参考提示（阶段3）：命中历史同类任务则追加，仅供参考不强制
             if self.skill_store is not None:
@@ -983,11 +986,15 @@ class ConsciousnessAgent:
                 pass
 
         # 更新对话历史（存40条=20轮，按用户隔离，线程安全）
-        self.append_turn_to_history(user_input, response, uid=current_uid)
+        # 附件路径一并写入历史，方便下一轮"帮我标注一下"能找回同一个文件
+        history_input = user_input
+        if attachment_path:
+            history_input = f"{user_input}\n（附件：{attachment_path}）".strip()
+        self.append_turn_to_history(history_input, response, uid=current_uid)
 
         # 记录到 interactions 表（启动恢复用）
         try:
-            self.memory.store.log_interaction(user_input, response, user_id=current_uid)
+            self.memory.store.log_interaction(history_input, response, user_id=current_uid)
         except Exception:
             pass
 
@@ -1010,15 +1017,17 @@ class ConsciousnessAgent:
     def _preprocess_attachment(self, user_input: str):
         """
         检测输入中的 [图片:path] 或 [文件:path] 标记
-        返回 (清理后的用户输入, 附件内容描述)
+        返回 (清理后的用户输入, 附件内容描述, 附件路径)
         """
         import re
         file_context = ""
+        attachment_path = ""
 
         # 检测图片
         img_match = re.search(r'\[图片:\s*(.+?)\]', user_input)
         if img_match:
             img_path = img_match.group(1).strip()
+            attachment_path = img_path
             user_input = user_input.replace(img_match.group(0), "").strip()
             try:
                 from engine.vision_client import create_vision_client
@@ -1027,7 +1036,7 @@ class ConsciousnessAgent:
                     result = client.analyze(img_path,
                                             question=user_input or "描述这张图片")
                     if result.get("ok"):
-                        file_context = f"【图片识别结果】\n{result['description']}"
+                        file_context = f"【图片识别结果】\n{result['description']}\n（图片文件：{img_path}）"
                         self._log("图片", f"识别成功：{result['description'][:80]}")
                     else:
                         file_context = f"【图片】路径：{img_path}（识别失败：{result.get('error','')}）"
@@ -1043,7 +1052,7 @@ class ConsciousnessAgent:
                         provider=cfg.get("api_provider", "openai")
                     )
                     if result.get("ok"):
-                        file_context = f"【图片识别结果】\n{result['description']}"
+                        file_context = f"【图片识别结果】\n{result['description']}\n（图片文件：{img_path}）"
                         self._log("图片", f"识别成功（回退模式）：{result['description'][:80]}")
                     else:
                         file_context = f"【图片】路径：{img_path}（识别失败：{result.get('error','')}）"
@@ -1054,6 +1063,7 @@ class ConsciousnessAgent:
         file_match = re.search(r'\[文件:\s*(.+?)\]', user_input)
         if file_match:
             file_path = file_match.group(1).strip()
+            attachment_path = file_path
             user_input = user_input.replace(file_match.group(0), "").strip()
             try:
                 from engine.office_tools import read_office_file
@@ -1061,17 +1071,22 @@ class ConsciousnessAgent:
                 if result.get("ok"):
                     text = result.get("text", "")[:3000]
                     ftype = result.get("type", "").upper()
-                    file_context = f"【{ftype}文件内容】\n{text}"
+                    file_context = f"【{ftype}文件内容】\n（文件路径：{file_path}）\n{text}"
+                    if file_path.lower().endswith(".pdf"):
+                        file_context += (
+                            "\n（如需在 PDF 上标注并截图，调用 annotate_pdf，"
+                            "path 用上面给出的文件路径）"
+                        )
                     self._log("文件", f"读取成功：{len(text)} 字符")
                 else:
-                    file_context = f"【文件】{file_path}（读取失败：{result.get('error','')}）"
+                    file_context = f"【文件】路径：{file_path}（读取失败：{result.get('error','')}）"
             except Exception as e:
-                file_context = f"【文件】{file_path}"
+                file_context = f"【文件】路径：{file_path}（读取异常：{e}）"
 
         if not user_input and file_context:
             user_input = "请分析以上内容"
 
-        return user_input, file_context
+        return user_input, file_context, attachment_path
 
     def _perceive(self, user_input: str, simlife_context: str = "") -> Dict:
         # 第一步：自我感知（感受自己的身体和当前生活状态）

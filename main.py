@@ -247,6 +247,15 @@ class EngineLoader(QThread):
                 verbose=True
             )
 
+            # 桌面端兜底确认：QQ / 飞书 / 网页等非 GUI 线程也走网页弹窗，
+            # 90 秒未确认自动拒绝；GUI 自己的对话仍由 Qt 弹窗覆盖
+            try:
+                from hardware.web_confirm import request_confirm
+                executor.confirm = lambda tool_name, params: request_confirm(
+                    tool_name, params, timeout=90)
+            except Exception as e:
+                print(f"[WebConfirm] 高风险确认注入失败: {e}")
+
             # 用户画像（与记忆数据库共用同一个文件）
             user_profile = UserProfileManager(DB_FILE)
 

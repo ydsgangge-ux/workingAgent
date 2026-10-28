@@ -3056,7 +3056,9 @@ def create_pdf_file(path: str, content: str, title: str = "") -> Dict:
     description="把 PDF 逐页渲染成截图并在指定文字上做精准标注，返回多张 PNG 图片（可用 image 消息连发）。"
                 "用法：先读 PDF 文本（read_office 或 read_file），挑出要强调的句子作为 marks.text；"
                 "marks 为 JSON 数组，每项 {\"page\":页号(从1起), \"text\":要框住的文字, \"label\":可选说明}。"
-                "marks 留空则只渲染所选页面截图、不加框。path 用用户上传时看到的 [文件:...] 里的路径。",
+                "marks 留空则只渲染所选页面截图、不加框。"
+                "path 用消息里的 [文件:...] 路径，或【文件内容】开头给出的文件路径；"
+                "不要用 dir / find 去猜用户文件位置。",
     parameters={
         "path":  {"type": "string", "description": "PDF 文件路径", "required": True},
         "pages": {"type": "string", "description": "要处理的页，all(默认)/1,3-5/2", "required": False},

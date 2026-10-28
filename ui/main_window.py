@@ -105,8 +105,8 @@ class AGIWorker(QThread):
         self._confirm_result = None
         self._confirm_event.clear()
         self.confirm_requested.emit(tool_name, params)
-        # 等待主线程设置结果（超时 120 秒）
-        self._confirm_event.wait(timeout=120)
+        # 等待主线程设置结果（超时 90 秒，与各渠道保持一致）
+        self._confirm_event.wait(timeout=90)
         return self._confirm_result if self._confirm_result is not None else False
 
     def set_confirm_result(self, allowed: bool):

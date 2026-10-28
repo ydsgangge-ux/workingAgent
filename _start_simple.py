@@ -50,6 +50,14 @@ memory = HierarchicalMemoryManager(store, net, llm_client=llm)
 from engine.executor import BLayerExecutor
 executor = BLayerExecutor(llm_client=llm, confirm_callback=None, max_tool_steps=8, verbose=True)
 
+# 注入高风险操作确认：网页弹窗（90 秒未确认自动拒绝）
+try:
+    from hardware.web_confirm import request_confirm
+    executor.confirm = lambda tool_name, params: request_confirm(
+        tool_name, params, timeout=90)
+except Exception as e:
+    print(f"[WebConfirm] 高风险确认注入失败: {e}")
+
 from engine.auth import AuthManager
 auth = AuthManager(DB_FILE)
 

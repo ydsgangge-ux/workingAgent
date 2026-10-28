@@ -23,7 +23,7 @@ _pending: Dict[str, dict] = {}      # confirm_id → {event, result, lock}
 _sse_listeners = []                  # SSE 监听者队列
 
 
-def request_confirm(tool_name: str, params: dict, timeout: float = 120) -> bool:
+def request_confirm(tool_name: str, params: dict, timeout: float = 90) -> bool:
     """
     请求网页端确认（阻塞调用，等待前端回复）。
     超时返回 False。
