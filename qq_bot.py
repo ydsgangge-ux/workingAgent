@@ -87,6 +87,48 @@ def _parse_ids(raw) -> set:
     return {s for s in re.split(r"[,，;；\s]+", str(raw or "")) if s}
 
 
+# ── QQ 表情映射 ────────────────────────────────────────────
+# 常用 QQ 表情 id → 名称：收到的表情转成 [表情:名称] 供 AI 理解
+FACE_NAMES = {
+    "0": "惊讶", "1": "撇嘴", "2": "色", "3": "发呆", "4": "得意",
+    "5": "流泪", "6": "害羞", "7": "闭嘴", "8": "睡", "9": "大哭",
+    "10": "尴尬", "11": "发怒", "12": "调皮", "13": "呲牙", "14": "微笑",
+    "15": "难过", "16": "酷", "17": "冷汗", "18": "抓狂", "19": "吐",
+    "20": "偷笑", "21": "可爱", "22": "白眼", "23": "傲慢", "24": "饥饿",
+    "25": "困", "26": "惊恐", "27": "流汗", "28": "憨笑", "29": "大兵",
+    "30": "奋斗", "31": "咒骂", "32": "疑问", "33": "嘘", "34": "晕",
+    "35": "折磨", "36": "衰", "37": "骷髅", "38": "敲打", "39": "再见",
+    "40": "擦汗", "41": "抠鼻", "42": "鼓掌", "43": "糗大了", "44": "坏笑",
+    "45": "左哼哼", "46": "右哼哼", "47": "哈欠", "48": "鄙视", "49": "委屈",
+    "50": "快哭了", "51": "阴险", "52": "亲亲", "53": "吓", "54": "可怜",
+    "55": "菜刀", "56": "西瓜", "57": "啤酒", "58": "篮球", "59": "乒乓",
+    "60": "咖啡", "61": "饭", "62": "猪头", "63": "玫瑰", "64": "凋谢",
+    "66": "爱心", "67": "心碎", "68": "蛋糕", "69": "闪电", "70": "炸弹",
+    "71": "刀", "72": "足球", "74": "便便", "75": "月亮", "76": "太阳",
+    "77": "礼物", "78": "拥抱", "79": "强", "80": "弱", "81": "握手",
+    "82": "胜利", "83": "抱拳", "84": "勾引", "85": "拳头", "86": "差劲",
+    "87": "爱你", "88": "NO", "89": "OK", "90": "爱情", "91": "飞吻",
+    "92": "跳跳", "93": "发抖", "94": "怄火", "95": "转圈", "96": "磕头",
+    "97": "回头", "98": "跳绳", "99": "挥手", "100": "激动",
+}
+
+# AI 回复里的 emoji → QQ 表情 id；未收录的 emoji 原样保留为文字
+EMOJI_FACE = {
+    "😊": "14", "🙂": "14", "😄": "14", "😁": "13", "😆": "13",
+    "😂": "13", "🤣": "13", "😭": "5", "😢": "5", "🥲": "5",
+    "😡": "11", "😠": "11", "😳": "6", "😴": "8", "😪": "8",
+    "😏": "4", "😎": "16", "🤔": "32", "😅": "27", "😓": "27",
+    "😱": "26", "😨": "26", "🤢": "19", "🤮": "19", "😍": "21",
+    "😘": "52", "👍": "79", "👎": "80", "👏": "42", "🙏": "83",
+    "🤝": "81", "✌": "82", "❤": "66", "💔": "67", "🌹": "63",
+    "🍰": "68", "🍺": "57", "☕": "60", "⚽": "72", "🐷": "62",
+}
+
+# 回复里显式的表情标记：[face:14]
+FACE_TOKEN_RE = re.compile(r"\[face:(\d{1,4})\]")
+FACE_MAX = 5          # 单条回复最多带 5 个表情，避免刷屏
+
+
 # ── OneBot 11 客户端 ────────────────────────────────────────
 class OneBotClient:
     """极简 OneBot 11 WS 客户端：收事件 + 调用 API（靠 echo 关联应答）"""
@@ -336,7 +378,13 @@ class QQBot:
                 path = self._save_file(data)
                 if path:
                     attachments.append(f"[文件:{path}]")
-            elif t in ("at", "reply", "face", "mface", "json", "xml"):
+            elif t == "face":
+                fid = str(data.get("id", ""))
+                texts.append(f"[表情:{FACE_NAMES.get(fid, fid)}]")
+            elif t == "mface":
+                summary = data.get("summary") or data.get("name") or "动态表情"
+                texts.append(f"[表情包:{summary}]")
+            elif t in ("at", "reply", "json", "xml"):
                 continue
             elif t == "record":
                 attachments.append("[语音]")
@@ -394,17 +442,70 @@ class QQBot:
 
     # ── 回复与交付 ─────────────────────────────────────
     def _reply(self, kind: str, target: str, text: str, at_user: str = ""):
-        """发送文本（自动分段），群聊可带 @"""
-        for chunk in self._split_text(text):
+        """发送文本（自动分段），并把 [face:N] / emoji 转成 QQ 表情段"""
+        text = text or ""
+        tokens = self._tokenize(text)
+        text_len = sum(len(v) for k, v in tokens if k == "text")
+
+        # 常规长度：一次发出，文字与表情按原顺序排列
+        if tokens and text_len <= self.TEXT_LIMIT:
+            segs = []
+            if at_user:
+                segs.append({"type": "at", "data": {"qq": str(at_user)}})
+                segs.append({"type": "text", "data": {"text": " "}})
+            faces = 0
+            for k, v in tokens:
+                if k == "face":
+                    if faces >= FACE_MAX:
+                        continue
+                    faces += 1
+                    segs.append({"type": "face", "data": {"id": v}})
+                else:
+                    segs.append({"type": "text", "data": {"text": v}})
+            self._send_group_or_private(kind, target, segs)
+            return
+
+        # 超长回复：退化为纯文本分段（表情标记去掉，避免切段后错位）
+        plain = FACE_TOKEN_RE.sub("", text)
+        for chunk in self._split_text(plain):
             segs = []
             if at_user:
                 segs.append({"type": "at", "data": {"qq": str(at_user)}})
                 segs.append({"type": "text", "data": {"text": " "}})
             segs.append({"type": "text", "data": {"text": chunk}})
-            if kind == "group":
-                self._client.send_group(target, segs)
+            self._send_group_or_private(kind, target, segs)
+
+    @staticmethod
+    def _tokenize(text: str) -> list:
+        """切成 [('text', 文本) | ('face', 表情id)]，保持原始顺序"""
+        toks, pos = [], 0
+        for m in FACE_TOKEN_RE.finditer(text):
+            if m.start() > pos:
+                toks.extend(QQBot._emoji_tokens(text[pos:m.start()]))
+            toks.append(("face", m.group(1)))
+            pos = m.end()
+        if pos < len(text):
+            toks.extend(QQBot._emoji_tokens(text[pos:]))
+        return toks
+
+    @staticmethod
+    def _emoji_tokens(s: str) -> list:
+        """emoji → ('face', id)；不认识的字符归入文本"""
+        toks, buf = [], ""
+        for ch in s:
+            if ch in ("\ufe0f", "\u200d"):   # 变体选择符 / 零宽连接符，丢弃
+                continue
+            fid = EMOJI_FACE.get(ch)
+            if fid:
+                if buf:
+                    toks.append(("text", buf))
+                    buf = ""
+                toks.append(("face", fid))
             else:
-                self._client.send_private(target, segs)
+                buf += ch
+        if buf:
+            toks.append(("text", buf))
+        return toks
 
     @staticmethod
     def _split_text(text: str, limit: int = TEXT_LIMIT) -> list:
