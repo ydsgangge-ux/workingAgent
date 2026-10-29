@@ -1748,7 +1748,7 @@ class SettingsPage(QWidget):
 
         qoder_lay.addWidget(QLabel("默认仓库:"), 3, 0)
         self._qoder_default_repo = QLineEdit(self._cfg.get("qoder_default_repo", ""))
-        self._qoder_default_repo.setPlaceholderText("留空使用当前项目根目录")
+        self._qoder_default_repo.setPlaceholderText("留空自动使用 workspace/default（推荐）")
         qoder_lay.addWidget(self._qoder_default_repo, 3, 1)
 
         qoder_lay.addWidget(QLabel("权限模式:"), 4, 0)
@@ -2384,12 +2384,14 @@ class SettingsPage(QWidget):
             cfg["qoder_default_repo"] = self._qoder_default_repo.text().strip()
             r = check_qoder(cfg)
             if r.get("installed"):
+                repo_line = (f"{r.get('repo')}"
+                             f"{'（自动工作区）' if r.get('repo_auto') else ''}"
+                             f"{'' if r.get('repo_is_git') else '（不是 git 仓库）'}")
                 msg = (
                     f"已安装：{r.get('path','')}\n"
                     f"版本：{r.get('version','')}\n"
                     f"登录：{'已登录（' + r.get('account','') + '）' if r.get('logged_in') else '未登录，请先 qoder login'}\n"
-                    f"默认仓库：{r.get('repo','')}"
-                    f"{'' if r.get('repo_exists') else '（不存在）'}\n"
+                    f"默认仓库：{repo_line}\n"
                     f"认证：{'已填写 PAT' if r.get('has_token') else '复用本机 qoder login'}"
                 )
                 QMessageBox.information(self, "Qoder CLI 可用", msg)

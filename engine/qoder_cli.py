@@ -52,10 +52,6 @@ def _load_cfg() -> Dict:
         return {}
 
 
-def _project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
-
-
 def resolve_cli(cfg: Optional[Dict] = None) -> str:
     """返回可执行的 qoder 路径，找不到返回空字符串"""
     cfg = cfg if cfg is not None else _load_cfg()
@@ -103,11 +99,53 @@ def _cli_help(cli: str) -> str:
     return text
 
 
+def default_workspace() -> Path:
+    """默认工作区：项目根/workspace/default，首次使用时自动 git init。
+
+    这样即使没人设置“默认仓库”，CLI 也有一个安全、可验收的落点，
+    不会回退到主项目根目录去乱改。
+    """
+    root = Path(__file__).resolve().parent.parent / "workspace" / "default"
+    root.mkdir(parents=True, exist_ok=True)
+    if not (root / ".git").exists():
+        try:
+            git = ["git", "-C", str(root)]
+            subprocess.run(git + ["init", "-q"], capture_output=True, timeout=20, shell=False)
+            subprocess.run(git + ["config", "user.email", "agent@local"],
+                           capture_output=True, timeout=10, shell=False)
+            subprocess.run(git + ["config", "user.name", "workingAgent"],
+                           capture_output=True, timeout=10, shell=False)
+            gi = root / ".gitignore"
+            if not gi.exists():
+                gi.write_text("__pycache__/\n*.pyc\n.env\nnode_modules/\n",
+                              encoding="utf-8")
+            subprocess.run(git + ["add", "-A"], capture_output=True, timeout=20, shell=False)
+            subprocess.run(git + ["commit", "-qm", "init", "--allow-empty"],
+                           capture_output=True, timeout=20, shell=False)
+        except Exception:
+            pass
+    return root
+
+
 def _resolve_repo(repo: str, cfg: Dict) -> str:
+    """解析目标仓库；未配置时回退到自动工作区（不是项目根目录）。"""
     candidate = (repo or cfg.get("qoder_default_repo") or "").strip()
     if not candidate:
-        return str(_project_root())
+        return str(default_workspace())
     return str(Path(candidate).expanduser().resolve())
+
+
+def _is_git_repo(path: str) -> bool:
+    """判断路径是否位于一个 git 工作区内"""
+    try:
+        r = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10, shell=False,
+        )
+        return (r.stdout or "").strip().lower() == "true"
+    except Exception:
+        return False
 
 
 def _git_lines(repo: str, args: List[str]) -> str:
@@ -195,6 +233,13 @@ def run_task(task: str, repo: str = "", timeout: int = 0,
     repo_path = _resolve_repo(repo, cfg)
     if not Path(repo_path).is_dir():
         return {"ok": False, "error": f"仓库目录不存在：{repo_path}"}
+    if not _is_git_repo(repo_path):
+        return {
+            "ok": False,
+            "error": f"目标目录不是 git 仓库：{repo_path}。"
+                     "无法对比改动、无法验收，请先在该目录执行 git init，"
+                     "或改用一个已有的 git 仓库。",
+        }
 
     mode = (permission_mode or cfg.get("qoder_permission_mode")
             or DEFAULT_PERMISSION).strip()
@@ -376,6 +421,7 @@ def check_qoder(cfg: Optional[Dict] = None) -> Dict:
                 "error": f"无法执行 qoder --version：{e}"}
 
     repo = _resolve_repo("", cfg)
+    repo_auto = not str(cfg.get("qoder_default_repo") or "").strip()
 
     # 读取登录状态（status 输出含 "Account: xxx"）
     account = ""
@@ -405,7 +451,9 @@ def check_qoder(cfg: Optional[Dict] = None) -> Dict:
         "account": account,
         "login_method": login_method,
         "repo": repo,
-        "repo_exists": Path(repo).is_dir(),
+        "repo_auto": repo_auto,
+        "repo_exists": bool(repo) and Path(repo).is_dir(),
+        "repo_is_git": bool(repo) and _is_git_repo(repo),
         "has_token": bool(str(cfg.get("qoder_token") or "").strip()),
         "token_env": bool(os.environ.get("QODER_PERSONAL_ACCESS_TOKEN")),
         "permission_mode": cfg.get("qoder_permission_mode") or DEFAULT_PERMISSION,

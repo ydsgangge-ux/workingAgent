@@ -503,13 +503,15 @@ def run_command(command: str, cwd: str = None, timeout: int = 30) -> Dict:
         "补测试、修构建错误等需要多轮迭代的任务。"
         "它只改工作区，不会 commit 或 push；执行后返回真实改动文件和 diff 统计，"
         "用于人工/B 层验收。简单单文件读写不要用它。"
+        "例外：用户明确点名“用 Qoder / CLI / 编码智能体执行”时，"
+        "无论任务大小都必须调用本工具，不要改成本地工具。"
     ),
     parameters={
         "task": {"type": "string",
                  "description": "完整任务描述：目标 + 验收标准 + 约束（不要只写一句话）",
                  "required": True},
         "repo": {"type": "string",
-                 "description": "仓库绝对路径，留空用配置的 qoder_default_repo（默认项目根目录）"},
+                 "description": "git 仓库绝对路径；留空用配置的默认仓库，未配置时自动使用 workspace/default（已自动 git init）"},
         "timeout": {"type": "integer",
                     "description": "超时秒数，默认取配置（900）"},
         "permission_mode": {"type": "string",

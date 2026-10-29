@@ -83,6 +83,9 @@ mock_images/
 # AI 草稿/笔记工作区（不入库）
 ai_notes/
 
+# Qoder CLI 默认工作区（自动创建，不入库）
+workspace/
+
 # ── 本地调试/临时文件 ─────────────────────────
 .trae/
 downloads/

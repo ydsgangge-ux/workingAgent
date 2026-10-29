@@ -1245,6 +1245,17 @@ class ConsciousnessAgent:
         """
         if not text:
             return None
+        low = text.lower().replace(" ", "")
+        # 口语化点名：只有“平台 + 执行动作”同时出现才强制，
+        # 避免“Qoder 怎么设置/需要登录吗”这类咨询被误判成任务。
+        if any(k in low for k in ("用cli", "调用cli", "cli执行", "cli跑")):
+            return "delegate_coding_task"
+        _platform = any(k in low for k in
+                        ("qoder", "编码cli", "编码智能体", "delegate_coding_task"))
+        _action = any(k in low for k in
+                      ("执行", "调用", "委托", "委派", "交给", "跑", "delegate", "必须用", "让qoder"))
+        if _platform and _action:
+            return "delegate_coding_task"
         try:
             from engine.tools import TOOL_REGISTRY
         except Exception:

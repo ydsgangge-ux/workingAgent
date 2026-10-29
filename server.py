@@ -1334,7 +1334,7 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
         </div>
         <div class="field">
           <label>默认仓库目录</label>
-          <input id="cfg-qoder-repo" class="input" type="text" placeholder="留空使用项目根目录">
+          <input id="cfg-qoder-repo" class="input" type="text" placeholder="留空自动使用 workspace/default（推荐）">
         </div>
         <div class="field">
           <label>权限模式</label>
