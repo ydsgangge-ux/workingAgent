@@ -194,6 +194,18 @@ class Bridge:
             )
         return "\n".join(lines)
 
+    @staticmethod
+    def _format_local_time(raw) -> str:
+        """把记忆里的 ISO 时间（可能是 UTC）转成设备本地时间文本"""
+        s = str(raw or "")
+        try:
+            d = datetime.fromisoformat(s)
+            if d.tzinfo:
+                d = d.astimezone().replace(tzinfo=None)
+            return d.strftime("%m-%d %H:%M")
+        except Exception:
+            return s[:16].replace("T", " ")
+
     def note_camera_frame(self, ts: float):
         """记录一次成功取帧时间（定时抓帧或用户主动看摄像头时调用）"""
         if ts > 0:
@@ -218,10 +230,10 @@ class Bridge:
         if not results:
             return ""
 
-        lines = []
+        lines = ["（以下为设备本地时间；方括号内是过去观察到的时间，不是现在）"]
         for i, r in enumerate(results, 1):
             desc = r.get("description", "")
-            ts = r.get("timestamp", "")[:19]
+            ts = self._format_local_time(r.get("timestamp", ""))
             conf = r.get("vision_confidence", 0)
             line = f"{i}. [{ts}] {desc}（置信度{conf:.2f}）"
 
@@ -394,11 +406,49 @@ class Bridge:
         _loop_count = 0
         CLEANUP_EVERY = 72
 
-        def _loop():
+        def _capture_once():
+            try:
+                from .vision_pipeline import VisionPipeline
+                vp = VisionPipeline(phone_sensor=self._phone_sensor)
+                try:
+                    result = vp.run_once(on_frame=self.note_camera_frame)
+                finally:
+                    # 兜底：取帧回调没触发时再用最终值补记一次
+                    self.note_camera_frame(getattr(vp, "_last_frame_at", 0))
+                if result and result.persons:
+                    names = [p.get("name", "?") for p in result.persons]
+                    _log_event(f"[定时视觉] 检测到人物: {', '.join(names)}")
+                elif result:
+                    _log_event(f"[定时视觉] {result.description[:60]}")
+            except Exception as e:
+                print(f"[Bridge] 定时抓帧失败: {e}")
+
+        def _cleanup_if_due():
             nonlocal _loop_count
+            _loop_count += 1
+            if _loop_count < CLEANUP_EVERY:
+                return
+            _loop_count = 0
+            try:
+                self._store.decay_importance()
+                self._store.cleanup()
+                stats = self._store.count_by_type()
+                # 图片清理
+                try:
+                    from .image_manager import ImageManager
+                    img_mgr = ImageManager()
+                    img_stats = img_mgr.cleanup(store=self._store)
+                    _log_event(f"[记忆维护] 衰减+清理完成: {stats}, 图片清理: {img_stats}")
+                except Exception as img_e:
+                    _log_event(f"[记忆维护] 衰减+清理完成: {stats}, 图片清理失败: {img_e}")
+            except Exception as e:
+                print(f"[Bridge] 记忆清理失败: {e}")
+
+        def _loop():
+            # 启动立刻抓一帧，避免启动后一个抓帧周期内被判定为"摄像头离线"
+            _capture_once()
             while not self._periodic_stop.is_set():
-                self._periodic_stop.wait(timeout=self._capture_interval)
-                if self._periodic_stop.is_set():
+                if self._periodic_stop.wait(timeout=self._capture_interval):
                     break
 
                 if self._mode == "dialog":
@@ -406,36 +456,8 @@ class Bridge:
                         _log_event("[对话超时] 回到待机模式")
                         self.set_mode("standby")
 
-                try:
-                    from .vision_pipeline import VisionPipeline
-                    vp = VisionPipeline(phone_sensor=self._phone_sensor)
-                    result = vp.run_once()
-                    self.note_camera_frame(getattr(vp, "_last_frame_at", 0))
-                    if result and result.persons:
-                        names = [p.get("name", "?") for p in result.persons]
-                        _log_event(f"[定时视觉] 检测到人物: {', '.join(names)}")
-                    elif result:
-                        _log_event(f"[定时视觉] {result.description[:60]}")
-                except Exception as e:
-                    print(f"[Bridge] 定时抓帧失败: {e}")
-
-                _loop_count += 1
-                if _loop_count >= CLEANUP_EVERY:
-                    _loop_count = 0
-                    try:
-                        self._store.decay_importance()
-                        self._store.cleanup()
-                        stats = self._store.count_by_type()
-                        # 图片清理
-                        try:
-                            from .image_manager import ImageManager
-                            img_mgr = ImageManager()
-                            img_stats = img_mgr.cleanup(store=self._store)
-                            _log_event(f"[记忆维护] 衰减+清理完成: {stats}, 图片清理: {img_stats}")
-                        except Exception as img_e:
-                            _log_event(f"[记忆维护] 衰减+清理完成: {stats}, 图片清理失败: {img_e}")
-                    except Exception as e:
-                        print(f"[Bridge] 记忆清理失败: {e}")
+                _capture_once()
+                _cleanup_if_due()
 
         self._periodic_thread = threading.Thread(target=_loop, daemon=True)
         self._periodic_thread.start()

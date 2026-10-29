@@ -591,7 +591,7 @@ class MemoryStore:
         """取最近 N 条对话记录（时间倒序），用于启动时恢复上下文"""
         with guarded_connect(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT user_input, response FROM interactions "
+                "SELECT user_input, response, timestamp FROM interactions "
                 "WHERE user_id=? ORDER BY timestamp DESC LIMIT ?",
                 (user_id, limit)
             ).fetchall()

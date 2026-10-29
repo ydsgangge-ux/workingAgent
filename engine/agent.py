@@ -41,11 +41,14 @@ MEMORY_OUTLINE_K    = 6     # 细纲检索数量
 MEMORY_DETAIL_K     = 3     # 细节检索数量
 
 
-SELF_PERCEPTION_PROMPT = """你是{name}，你是一个有真实身体和生活的普通人。你正在经历以下生活状态：
+SELF_PERCEPTION_PROMPT = """你是{name}，你是一个有真实身体和生活的普通人。
+当前真实时间（设备本地时间）：{current_time}
+
+你正在经历以下生活状态：
 
 {simlife_context}
 
-请用第一人称，用1-2句话描述你此刻的内心感受和身体状态。不要提AI，不要提代码，不要提数据。像真人一样自然地感受你现在的处境。
+请用第一人称，用1-2句话描述你此刻的内心感受和身体状态。不要提AI，不要提代码，不要提数据。像真人一样自然地感受你现在的处境。生活状态只是背景，若其中时间与当前真实时间冲突，一律以当前真实时间为准。
 
 直接输出感受描述，不要JSON。"""
 
@@ -99,7 +102,7 @@ REASONING_PROMPT = """你是{name}，一个有完整人格和记忆的意识主�
 {time_gap}
 
 【当前对话】
-当前时间：{current_time}（这是此刻的真实时间，必须据此描述当下场景，如白天/黑夜、光线、作息；禁止把记忆里过去某个时段——如深夜聊天——当作现在正在发生）
+当前时间：{current_time}（这是此刻的真实时间，必须据此描述当下场景，如白天/黑夜、光线、作息；禁止把记忆里过去某个时段——如深夜聊天、周一早上——当作现在正在发生。视觉记忆、最近记忆、对话历史里的时间都是过去，绝不能据此推断今天是周几或现在几点）
 {current_user_name}：{user_input}
 任务类型：{task_type}
 你的初步感受：{emotion_desc}
@@ -153,7 +156,7 @@ RESPONSE_PROMPT = """你是{name}，请根据以下内容生成自然的回应�
 
 {history_section}
 
-当前时间：{current_time}（此刻真实时间，据此描述当下场景，上周/凌晨等过去时段不能当作现在）
+当前时间：{current_time}（此刻真实时间，据此描述当下场景；视觉记忆、最近记忆、对话历史里的时间都是过去，不能当作现在，也不能据此推断今天是周几或现在几点）
 {current_user_name}说："{user_input}"
 
 你的内在推理：{inner_reasoning}
@@ -262,6 +265,17 @@ class ConsciousnessAgent:
                 self.conversation_history[uid] = []
             return self.conversation_history[uid]
 
+    @staticmethod
+    def _fmt_history_stamp(msg: Dict) -> str:
+        """把历史消息的时间戳格式化为 [月-日 时:分]，无时间戳时返回空串"""
+        ts = str(msg.get("ts") or "")
+        if not ts:
+            return ""
+        try:
+            return f"[{datetime.fromisoformat(ts).strftime('%m-%d %H:%M')}] "
+        except Exception:
+            return ""
+
     def append_to_history(self, role: str, content: str, uid: str = None) -> None:
         """供外部（如 main.py 的主动消息/定时/图片）安全追加对话历史。
         uid 为 None 时取当前登录用户，否则用 default。"""
@@ -270,7 +284,8 @@ class ConsciousnessAgent:
                    else "default")
         with self._history_lock:
             history = self._get_history(uid)
-            history.append({"role": role, "content": content})
+            history.append({"role": role, "content": content,
+                            "ts": datetime.now().isoformat()})
             if len(history) > HISTORY_STORE_LIMIT:
                 self.conversation_history[uid] = history[-HISTORY_STORE_LIMIT:]
 
@@ -282,8 +297,9 @@ class ConsciousnessAgent:
                    else "default")
         with self._history_lock:
             history = self._get_history(uid)
-            history.append({"role": "user", "content": user_input})
-            history.append({"role": "assistant", "content": response})
+            _now = datetime.now().isoformat()
+            history.append({"role": "user", "content": user_input, "ts": _now})
+            history.append({"role": "assistant", "content": response, "ts": _now})
             if len(history) > HISTORY_STORE_LIMIT:
                 self.conversation_history[uid] = history[-HISTORY_STORE_LIMIT:]
 
@@ -299,14 +315,17 @@ class ConsciousnessAgent:
             rows = self.memory.store.get_recent_interactions(limit=10, user_id=user_id)
             history = self._get_history(user_id)
             for row in reversed(rows):
+                row_ts = str(row[2]) if len(row) > 2 and row[2] else ""
                 if row[0]:
                     history.append({
                         "role": "user", "content": row[0],
-                        "user_name": user_name or user_id
+                        "user_name": user_name or user_id,
+                        "ts": row_ts,
                     })
                 if row[1]:
                     history.append({
-                        "role": "assistant", "content": row[1]
+                        "role": "assistant", "content": row[1],
+                        "ts": row_ts,
                     })
             if rows:
                 self._log("启动", f"已恢复 {len(rows)} 条对话上下文 (user={user_name or user_id})")
@@ -385,8 +404,8 @@ class ConsciousnessAgent:
             try:
                 from hardware.vision_pipeline import VisionPipeline
                 _vp = VisionPipeline()
-                result = _vp.run_once(force=True)
-                self.bridge.note_camera_frame(getattr(_vp, "_last_frame_at", 0))
+                result = _vp.run_once(
+                    force=True, on_frame=self.bridge.note_camera_frame)
                 if result:
                     live_vision_detail = self._describe_visual_memory(result)
                     self._log("视觉触发", f"实时精细分析完成: {result.description[:60]}")
@@ -403,9 +422,9 @@ class ConsciousnessAgent:
             vm_summary = ""
             try:
                 camera_live = self.bridge.has_live_camera()
-                # 摄像头在线时沿用最近一次视觉记忆；离线才限制在 10 分钟内
+                # 只注入最近 30 分钟的画面；摄像头离线时放宽到 15 分钟内的记忆
                 vm_summary = self.bridge.get_recent_vision(
-                    limit=3, max_age=None if camera_live else 600)
+                    limit=3, max_age=1800 if camera_live else 900)
             except Exception:
                 pass
 
@@ -464,6 +483,20 @@ class ConsciousnessAgent:
                 self._log("SimLife", f"读取失败: {e}")
         elif not has_real_vision:
             self._log("SimLife", "simlife_client 未初始化 (None)")
+
+        # 无真实感知、也无可用生活状态时：至少用设备本地时间兜底，避免时间凭空乱编
+        if not has_real_vision and not simlife_context:
+            _now = datetime.now()
+            _h = _now.hour
+            _period = ("凌晨" if _h < 5 else "清晨" if _h < 8 else
+                       "上午" if _h < 12 else "中午" if _h < 14 else
+                       "下午" if _h < 18 else "傍晚" if _h < 19 else
+                       "晚上" if _h < 23 else "深夜")
+            simlife_context = (
+                f"【当前真实时间（设备本地时间）】{_now.strftime('%Y年%m月%d日 %H:%M')}，{_period}。\n"
+                "你现在没有可用的摄像头或传感器数据，以上时间是你此刻唯一可信的时间锚点。"
+            )
+            self._log("时间兜底", f"无真实感知且无生活状态，注入设备时间 {_now:%H:%M}")
 
         # ① 感知（两步：先自我感知，再感知用户）
         perception = self._perceive(user_input, simlife_context=simlife_context)
@@ -1096,6 +1129,7 @@ class ConsciousnessAgent:
                 prompt = SELF_PERCEPTION_PROMPT.format(
                     name=self.personality.name,
                     simlife_context=simlife_context,
+                    current_time=datetime.now().strftime("%Y年%m月%d日 %H:%M"),
                 )
                 self_perception = self.b.generate(
                     prompt, max_tokens=150, temperature=0.7, thinking=False
@@ -1261,9 +1295,12 @@ class ConsciousnessAgent:
                     user_id=current_uid
                 )
                 if recent_memories:
-                    lines = [f"- {m.content[:150]}" for m in recent_memories]
+                    lines = []
+                    for m in recent_memories:
+                        _ts = getattr(m, "timestamp", "") or getattr(m, "created_at", "")
+                        lines.append(f"- {self._fmt_history_stamp({'ts': _ts})}{m.content[:150]}")
                     recent_context = (
-                        f"【最近记忆（按时间，帮助你理解上下文指代）】\n"
+                        f"【最近记忆（按时间，方括号内是过去发生的时间，不是现在）】\n"
                         + "\n".join(lines) + "\n"
                     )
             except Exception:
@@ -1273,10 +1310,10 @@ class ConsciousnessAgent:
         _reason_history = self._get_history(current_uid)
         if _reason_history:
             recent_conv = _reason_history[-6:]
-            conv_lines = [f"（注：[我主动发送的消息]和[我主动分享的图片]是你之前主动发给{current_user_name}的，不是{current_user_name}发的）"]
+            conv_lines = [f"（注：[我主动发送的消息]和[我主动分享的图片]是你之前主动发给{current_user_name}的，不是{current_user_name}发的；方括号内是过去对话发生的时间，不是现在）"]
             for m in recent_conv:
                 role = current_user_name if m["role"] == "user" else self.personality.name
-                conv_lines.append(f"{role}：{m['content'][:300]}")
+                conv_lines.append(f"{self._fmt_history_stamp(m)}{role}：{m['content'][:300]}")
             conv_text = "\n".join(conv_lines)
             if recent_context:
                 recent_context += f"\n【最近对话（帮助你理解上下文指代和任务连续性）】\n{conv_text}\n"
@@ -1335,10 +1372,10 @@ class ConsciousnessAgent:
         history_section = ""
         if _gen_history:
             recent = _gen_history[-HISTORY_SEND_LIMIT:]
-            lines = [f"（注：[我主动发送的消息]和[我主动分享的图片]是你之前主动发给{current_user_name}的，不是{current_user_name}发的）"]
+            lines = [f"（注：[我主动发送的消息]和[我主动分享的图片]是你之前主动发给{current_user_name}的，不是{current_user_name}发的；方括号内是过去对话发生的时间，不是现在）"]
             for m in recent:
                 role = current_user_name if m["role"] == "user" else self.personality.name
-                lines.append(f"{role}：{m['content']}")
+                lines.append(f"{self._fmt_history_stamp(m)}{role}：{m['content']}")
             history_section = "【对话历史（最近{}轮）】\n{}\n".format(
                 len(recent) // 2,
                 "\n".join(lines)

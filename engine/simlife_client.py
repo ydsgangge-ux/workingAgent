@@ -250,6 +250,24 @@ class SimLifeClient:
         if not state:
             return ""
 
+        # ── 时效校验：拒绝把过期快照当成"现在" ──
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        _today_date = str(state.get("today_date", ""))[:10]
+        if _today_date and _today_date != today_str:
+            print(f"[SimLife] 生活状态快照日期为 {_today_date}，不是今天，跳过注入")
+            return ""
+        _updated = str(state.get("last_updated", "") or state.get("updated_at", ""))
+        if _updated:
+            try:
+                _ts = datetime.fromisoformat(_updated.replace("Z", "+00:00"))
+                if _ts.tzinfo:
+                    _ts = _ts.astimezone().replace(tzinfo=None)
+                if (datetime.now() - _ts).total_seconds() > 6 * 3600:
+                    print(f"[SimLife] 生活状态最后更新于 {_updated}，超过 6 小时，跳过注入")
+                    return ""
+            except Exception:
+                pass
+
         character = self._read_character()
         name = ""
         city = ""

@@ -12,7 +12,7 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional, Literal, Callable
 
 import cv2
 import numpy as np
@@ -61,6 +61,7 @@ class VisionPipeline:
         self,
         memory_type: Literal["event", "space", "person", "interest"] = "event",
         force: bool = False,
+        on_frame: Optional[Callable[[float], None]] = None,
     ) -> Optional[VisualMemory]:
         """
         执行一轮完整流水线：
@@ -81,6 +82,11 @@ class VisionPipeline:
         # 保留当前帧用于后续存图
         self._last_img_bytes = img_bytes
         self._last_frame_at = time.time()
+        if on_frame:
+            try:
+                on_frame(self._last_frame_at)
+            except Exception:
+                pass
 
         # ── 变化检测 ──
         if not force:
