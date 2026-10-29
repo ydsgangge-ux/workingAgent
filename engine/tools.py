@@ -515,7 +515,7 @@ def run_command(command: str, cwd: str = None, timeout: int = 30) -> Dict:
         "timeout": {"type": "integer",
                     "description": "超时秒数，默认取配置（900）"},
         "permission_mode": {"type": "string",
-                            "description": "权限模式：default/accept_edits/auto/bypass_permissions，默认 accept_edits"},
+                            "description": "权限模式：default/accept_edits/auto/bypass_permissions，默认 auto"},
         "model": {"type": "string",
                   "description": "Qoder 模型名（对应 -m），留空用配置/账号默认模型"},
         "max_turns": {"type": "integer",

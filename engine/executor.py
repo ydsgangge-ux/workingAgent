@@ -148,6 +148,9 @@ class BLayerExecutor:
         max_tokens: int = 16384,
         user_input: str = "",
         only_tools: Optional[List[str]] = None,   # 传入则强制只允许这些工具
+        required_tool: Optional[str] = None,      # 必须先调用该工具，之后可用其他工具验收
+        skip_plan: bool = False,                  # 续跑时跳过分步计划，避免重复规划
+        prior_steps: Optional[List[Dict]] = None,  # 续跑时上一轮的已完成步骤
     ) -> Dict[str, Any]:
         """
         执行一个需要工具的任务
@@ -175,11 +178,24 @@ class BLayerExecutor:
         schemas = self._get_available_schemas(only_tools=only_tools)
 
         # 构建系统提示
-        base_system_prompt = self._build_system_prompt(context, only_tools=only_tools)
-
-        # 执行前先让 LLM 产出分步计划（可选；失败自动回退无计划）
-        extra_plan = self._plan_task(task, context, base_system_prompt)
-        system_prompt = self._build_system_prompt(context, extra_plan=extra_plan, only_tools=only_tools)
+        base_system_prompt = self._build_system_prompt(
+            context, only_tools=only_tools, required_tool=required_tool)
+        extra_plan = ""
+        if not skip_plan and not required_tool:
+            extra_plan = self._plan_task(task, context, base_system_prompt,
+                                         prior_steps=prior_steps)
+            # 续跑时计划器判断目标已达成 → 直接收尾，不再浪费一轮执行
+            if prior_steps and extra_plan.strip().rstrip("。") == "无需继续":
+                self._log("完成", "根据上一轮结果判断任务已达成，无需续跑")
+                return {
+                    "result": "基于上一轮已完成的步骤和产物，任务已达成目标，无需继续执行。",
+                    "steps": [],  # 不重复返回上一轮步骤，避免调用方拼接后重复计数
+                    "tools_used": [],
+                    "success": True,
+                }
+        system_prompt = self._build_system_prompt(
+            context, extra_plan=extra_plan, only_tools=only_tools,
+            required_tool=required_tool)
 
         # 消息历史
         messages = [{"role": "user", "content": task}]
@@ -196,11 +212,15 @@ class BLayerExecutor:
         last_text_output = ""  # 记录最后一步LLM的文本输出（超限兜底用）
 
         for step in range(self.max_steps):
+            # 点名工具未执行前，只暴露该工具；执行后恢复全部工具供检查/验收
+            step_schemas = schemas
+            if required_tool and required_tool not in tools_used:
+                step_schemas = self._get_available_schemas(only_tools=[required_tool])
             # 调用 LLM（带工具定义）
             response = self._call_llm_with_tools(
                 messages=messages,
                 system=system_prompt,
-                tools=schemas,
+                tools=step_schemas,
                 max_tokens=max_tokens
             )
 
@@ -223,6 +243,18 @@ class BLayerExecutor:
 
             # 如果没有工具调用，这就是最终答案
             if not tool_calls:
+                # 用户点名的工具还没执行：再给一轮机会，不允许只靠文字收尾
+                if required_tool and required_tool not in tools_used \
+                        and step < self.max_steps - 1:
+                    messages.append({"role": "assistant",
+                                     "content": text_content or "（未调用工具）"})
+                    messages.append({
+                        "role": "user",
+                        "content": f"你尚未调用必须使用的工具 {required_tool}。"
+                                   f"请立即调用它完成任务，不要只用文字回复。"
+                    })
+                    self._log("强制", f"未调用 {required_tool}，追加一轮")
+                    continue
                 self._log("完成", f"步骤 {step+1}，无更多工具调用")
                 # 收尾 LLM 若本身失败了，别让失败文本覆盖“已成功执行的工具战果”
                 if not text_content or text_content.startswith("API调用失败"):
@@ -328,6 +360,20 @@ class BLayerExecutor:
 
         # 超过最大步数 — 返回部分结果汇总
         summary = self._summarize_steps(steps, tools_used)
+        # 用户点名的工具已经成功 → 核心任务已交付；验收超限不算失败，避免无谓续跑
+        required_done = bool(required_tool) and any(
+            s.get("tool") == required_tool and (s.get("result") or {}).get("ok")
+            for s in steps
+        )
+        if required_done:
+            self._log("完成", f"{required_tool} 已成功，验收达到步数上限，按完成处理")
+            return {
+                "result": (f"核心任务已由 {required_tool} 完成；"
+                           f"验收步骤达到上限，以下为已完成的操作：\n\n{summary}"),
+                "steps": steps,
+                "tools_used": list(set(tools_used)),
+                "success": True,
+            }
         self._log("超限", f"超过 {self.max_steps} 步，返回已完成结果汇总")
         # 如果最后一步LLM有文本输出（可能是未完成的分析），一并返回
         result_text = f"任务执行达到最大步数（{self.max_steps}步），部分结果如下：\n\n{summary}"
@@ -830,7 +876,8 @@ class BLayerExecutor:
             })
         return schemas
 
-    def _plan_task(self, task: str, context: str, system_prompt: str) -> str:
+    def _plan_task(self, task: str, context: str, system_prompt: str,
+                   prior_steps: Optional[List[Dict]] = None) -> str:
         """（可选）执行前让 LLM 先产出分步计划，解析后注入 system prompt。
 
         失败时返回空串，调用方回退到无计划执行；绝不因计划失败中断任务。
@@ -843,11 +890,28 @@ class BLayerExecutor:
         if len(task.strip()) <= 40 and not any(k in task for k in _key):
             return ""
         try:
-            plan_prompt = (
-                f"请为下面这个任务制定一个按顺序执行的操作计划。\n"
-                f"只用编号列表输出，不要任何解释或引言：\n"
-                f"1. 步骤一\n2. 步骤二\n...\n\n任务：{task[:500]}"
-            )
+            if prior_steps:
+                done_lines = []
+                for s in prior_steps[-8:]:
+                    r = s.get("result") or {}
+                    ok = "成功" if r.get("ok") else "失败"
+                    brief = str(r.get("summary") or r.get("path") or r.get("error") or "")[:160]
+                    done_lines.append(f"- {s.get('tool','?')}：{ok} {brief}")
+                plan_prompt = (
+                    f"这是一个续跑任务。上一轮已经完成以下步骤：\n"
+                    f"{chr(10).join(done_lines)}\n\n"
+                    f"请基于这些已完成的结果，只列出**尚未完成**的剩余步骤，"
+                    f"禁止重复已完成动作，禁止再次调用已完成的工具，"
+                    f"不要重新规划整件事。如果原目标已经达成，只输出：无需继续。\n"
+                    f"只用编号列表输出，不要解释：\n1. 步骤一\n2. 步骤二\n\n"
+                    f"原始任务：{task[:800]}"
+                )
+            else:
+                plan_prompt = (
+                    f"请为下面这个任务制定一个按顺序执行的操作计划。\n"
+                    f"只用编号列表输出，不要任何解释或引言：\n"
+                    f"1. 步骤一\n2. 步骤二\n...\n\n任务：{task[:500]}"
+                )
             raw = self.generate(
                 prompt=plan_prompt,
                 max_tokens=800,
@@ -1006,7 +1070,8 @@ class BLayerExecutor:
             self._log("校验", f"校验异常放行：{type(e).__name__}")
 
     def _build_system_prompt(self, context: str, extra_plan: str = "",
-                             only_tools: Optional[List[str]] = None) -> str:
+                             only_tools: Optional[List[str]] = None,
+                             required_tool: Optional[str] = None) -> str:
         tools_list = ", ".join(
             name for name in (only_tools or self.allowed_tools or list(TOOL_REGISTRY.keys()))
         )
@@ -1032,6 +1097,16 @@ class BLayerExecutor:
 
         if context:
             base += f"\n\n任务背景：\n{context}"
+
+        if required_tool:
+            base += (
+                f"\n\n【强制工具】本次任务必须先调用 `{required_tool}` 完成主任务，"
+                f"不得用其他工具替代。`{required_tool}` 执行完成后，"
+                f"可以且应当继续调用其他工具做检查与验收（读取产物、运行测试、查看 git diff 等）。"
+                f"产物路径直接使用工具返回的 repo / changed_files，禁止全盘搜索。"
+                f"验收最多做 2 项关键检查（文件存在、内容或语法抽查），"
+                f"一旦确认产物已满足验收标准，立即结束并汇报，不要重复调用或重做。"
+            )
 
         if extra_plan:
             base += (

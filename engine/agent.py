@@ -659,9 +659,11 @@ class ConsciousnessAgent:
             tool_task = reasoning.get("tool_task") or user_input
             if forced_tool:
                 tool_task = (
-                    f"请严格且只使用工具 {forced_tool} 来完成用户的这条要求，不要调用其它工具。\n"
+                    f"必须先使用工具 {forced_tool} 完成用户要求的核心任务，"
+                    f"不得用其他工具替代它；{forced_tool} 完成后，"
+                    f"可以且应当使用其他工具检查、验证产物（读取文件、运行测试、查看 git diff 等）。\n"
                     f"用户原话：{user_input}\n"
-                    f"（这是用户点名指定的工具，必须实际调用它，回答必须基于它的真实返回结果）"
+                    f"（这是用户点名指定的工具，必须实际调用，回答必须基于它的真实返回结果）"
                 )
 
             # 检测用户是否要把"刚才的对话内容"传给工具（保存/转PDF/翻译/总结等）
@@ -714,7 +716,7 @@ class ConsciousnessAgent:
             exec_result = self.b.execute_task(
                 task=tool_task, context=context, use_tools=True,
                 max_tokens=_max_tokens, user_input=user_input,
-                only_tools=([forced_tool] if forced_tool else None),
+                required_tool=forced_tool,
             )
             tool_steps  = exec_result.get("steps", [])
             tools_used  = exec_result.get("tools_used", [])
@@ -738,12 +740,15 @@ class ConsciousnessAgent:
                     f"任务尚未完成，请基于已有进展继续执行，尽快产出最终交付物。\n"
                     f"【原始目标】{tool_task}\n"
                     f"【已完成动作与中间结果】\n{self._mid_steps_summary(tool_steps)}\n"
-                    f"【续跑要求】不要再从头重复搜索；直接抓取已定位的官方/一手数据源补齐缺失信息，尽早完成最终产出。"
+                    f"【续跑要求】先检查上面已完成步骤和产物路径，只补齐缺失部分；"
+                    f"禁止重复已完成动作、禁止重新委派同一任务，也不要重新规划整件事。"
+                    f"如果现有产物已满足原目标，直接汇报并结束。"
                 )
                 exec_result = self.b.execute_task(
                     task=_cont_task, context=context, use_tools=True,
                     max_tokens=_max_tokens, user_input=user_input,
-                    only_tools=([forced_tool] if forced_tool else None),
+                    required_tool=(forced_tool if forced_tool not in tools_used else None),
+                    prior_steps=tool_steps,
                 )
                 tool_steps  = tool_steps + exec_result.get("steps", [])
                 tools_used  = tools_used + exec_result.get("tools_used", [])

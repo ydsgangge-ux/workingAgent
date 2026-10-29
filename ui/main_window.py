@@ -1519,6 +1519,8 @@ class LearnerPage(QWidget):
 class SettingsPage(QWidget):
 
     settings_changed = pyqtSignal(dict)
+    # Qoder 模型列表后台加载完成
+    _qoder_models_ready = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1755,13 +1757,13 @@ class SettingsPage(QWidget):
         self._qoder_permission_mode = QComboBox()
         self._qoder_permission_mode.setStyleSheet(COMBO_STYLE)
         for _k, _n in (
+            ("auto", "auto（自动批准安全操作，推荐）"),
             ("accept_edits", "accept_edits（自动批准文件编辑，命令需授权）"),
             ("default", "default（所有操作都需确认，headless 会被拒绝）"),
-            ("auto", "auto（自动批准安全操作）"),
             ("bypass_permissions", "bypass_permissions（全部放行，危险）"),
         ):
             self._qoder_permission_mode.addItem(_n, _k)
-        _qmode = self._cfg.get("qoder_permission_mode") or "accept_edits"
+        _qmode = self._cfg.get("qoder_permission_mode") or "auto"
         _qidx = self._qoder_permission_mode.findData(_qmode)
         if _qidx >= 0:
             self._qoder_permission_mode.setCurrentIndex(_qidx)
@@ -2613,7 +2615,7 @@ class SettingsPage(QWidget):
         self._cfg["qoder_token"]           = self._qoder_token.text().strip()
         self._cfg["qoder_default_repo"]    = self._qoder_default_repo.text().strip()
         self._cfg["qoder_permission_mode"] = (self._qoder_permission_mode.currentData()
-                                              or "accept_edits")
+                                              or "auto")
         _qm = self._qoder_model.currentText().strip()
         self._cfg["qoder_model"] = "" if _qm.startswith("默认") else _qm
         try:
@@ -5554,8 +5556,6 @@ class MainWindow(QMainWindow):
 
     # 人脸识别完成后通知 UI 的信号（在主线程执行）
     _auth_done = pyqtSignal()
-    # Qoder 模型列表后台加载完成
-    _qoder_models_ready = pyqtSignal(list)
 
     def __init__(self, agent, db_file: str):
         super().__init__()

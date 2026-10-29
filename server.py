@@ -1339,9 +1339,9 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
         <div class="field">
           <label>权限模式</label>
           <select id="cfg-qoder-mode" class="input">
+            <option value="auto">auto（自动批准安全操作，推荐）</option>
             <option value="accept_edits">accept_edits（自动批准文件编辑）</option>
             <option value="default">default（全部需确认，headless 会拒绝）</option>
-            <option value="auto">auto（自动批准安全操作）</option>
             <option value="bypass_permissions">bypass_permissions（全部放行，危险）</option>
           </select>
         </div>
@@ -2179,7 +2179,7 @@ async function loadSettings(){
     document.getElementById('cfg-qoder-path').value=cfg.qoder_cli_path||'qoder';
     document.getElementById('cfg-qoder-token').value=cfg.qoder_token||'';
     document.getElementById('cfg-qoder-repo').value=cfg.qoder_default_repo||'';
-    document.getElementById('cfg-qoder-mode').value=cfg.qoder_permission_mode||'accept_edits';
+    document.getElementById('cfg-qoder-mode').value=cfg.qoder_permission_mode||'auto';
     document.getElementById('cfg-qoder-model').value=cfg.qoder_model||'';
     document.getElementById('cfg-qoder-timeout').value=cfg.qoder_timeout||900;
     document.getElementById('cfg-qoder-maxturns').value=cfg.qoder_max_turns||20;

@@ -7,7 +7,7 @@ Qoder CLI 接入
   - 预计耗时几分钟以上
 
 只负责"跑任务 + 收集证据"，是否合并由 B 层/用户决定：
-  - 默认 permission_mode=accept_edits（自动批准工作区文件编辑，命令仍需权限）
+  - 默认 permission_mode=auto（自动批准安全操作；无 TTY 时不会卡在权限询问）
   - 不执行 git commit / push
   - 运行前后对比 git status，返回真实改动文件清单
 
@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 DEFAULT_CLI = "qoder"
-DEFAULT_PERMISSION = "accept_edits"
+DEFAULT_PERMISSION = "auto"
 DEFAULT_MAX_TURNS = 20
 DEFAULT_TIMEOUT = 900
 _PROGRESS_KEEP = 8000       # 最终回复最多保留的字符数
@@ -321,6 +321,7 @@ def run_task(task: str, repo: str = "", timeout: int = 0,
             cmd,
             cwd=repo_path,
             env=env,
+            stdin=subprocess.DEVNULL,   # 无 TTY：权限询问直接失败，不无限等待输入
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
