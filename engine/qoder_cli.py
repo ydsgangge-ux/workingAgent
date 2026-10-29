@@ -376,11 +376,34 @@ def check_qoder(cfg: Optional[Dict] = None) -> Dict:
                 "error": f"无法执行 qoder --version：{e}"}
 
     repo = _resolve_repo("", cfg)
+
+    # 读取登录状态（status 输出含 "Account: xxx"）
+    account = ""
+    login_method = ""
+    try:
+        rs = subprocess.run(
+            [cli, "status"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=20, shell=False,
+        )
+        for line in ((rs.stdout or "") + (rs.stderr or "")).splitlines():
+            low = line.strip().lower()
+            if low.startswith("account:") or low.startswith("username:"):
+                account = line.split(":", 1)[1].strip()
+            elif low.startswith("login method:"):
+                login_method = line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    logged_in = bool(account) and "not logged in" not in account.lower()
+
     return {
         "ok": True,
         "installed": True,
         "path": cli,
         "version": version,
+        "logged_in": logged_in,
+        "account": account,
+        "login_method": login_method,
         "repo": repo,
         "repo_exists": Path(repo).is_dir(),
         "has_token": bool(str(cfg.get("qoder_token") or "").strip()),

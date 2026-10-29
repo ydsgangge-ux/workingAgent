@@ -1791,12 +1791,15 @@ class SettingsPage(QWidget):
         if _qmodel:
             self._qoder_model.setEditText(_qmodel)
         _qoder_model_lay.addWidget(self._qoder_model, 1)
-        _qoder_model_btn = QPushButton("🔄")
-        _qoder_model_btn.setFixedWidth(32)
+        _qoder_model_btn = QPushButton("刷新")
+        _qoder_model_btn.setFixedWidth(48)
         _qoder_model_btn.setToolTip("获取当前账号可用模型列表（需已登录）")
         _qoder_model_btn.clicked.connect(self._refresh_qoder_models)
         _qoder_model_lay.addWidget(_qoder_model_btn)
         qoder_lay.addWidget(_qoder_model_row, 6, 1)
+        # 打开设置后后台拉一次模型列表，避免下拉框里只有“默认”
+        self._qoder_models_ready.connect(self._apply_qoder_models)
+        QTimer.singleShot(600, self._auto_load_qoder_models)
 
         _qoder_check_btn = QPushButton("🔍 检测 Qoder CLI")
         _qoder_check_btn.setFixedHeight(28)
@@ -2384,6 +2387,7 @@ class SettingsPage(QWidget):
                 msg = (
                     f"已安装：{r.get('path','')}\n"
                     f"版本：{r.get('version','')}\n"
+                    f"登录：{'已登录（' + r.get('account','') + '）' if r.get('logged_in') else '未登录，请先 qoder login'}\n"
                     f"默认仓库：{r.get('repo','')}"
                     f"{'' if r.get('repo_exists') else '（不存在）'}\n"
                     f"认证：{'已填写 PAT' if r.get('has_token') else '复用本机 qoder login'}"
@@ -2394,6 +2398,47 @@ class SettingsPage(QWidget):
                                     r.get("error") or "请先安装 Qoder CLI")
         except Exception as e:
             QMessageBox.warning(self, "检测失败", str(e))
+
+    def _auto_load_qoder_models(self):
+        """后台拉取模型列表，避免下拉框长期只有“默认（不指定）”"""
+        try:
+            if self._qoder_model.count() > 1:
+                return
+        except Exception:
+            return
+        import threading
+        cfg = dict(self._cfg)
+        cfg["qoder_cli_path"] = (self._qoder_cli_path.text().strip() or "qoder")
+        cfg["qoder_token"] = self._qoder_token.text().strip()
+
+        def _work():
+            try:
+                from engine.qoder_cli import list_models
+                r = list_models(cfg)
+                if r.get("ok") and r.get("models"):
+                    self._qoder_models_ready.emit(list(r["models"]))
+            except Exception:
+                pass
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _apply_qoder_models(self, models: list):
+        """把模型名填进下拉框，保留用户已选项"""
+        if not models:
+            return
+        try:
+            current = self._qoder_model.currentText().strip()
+            self._qoder_model.blockSignals(True)
+            self._qoder_model.clear()
+            self._qoder_model.addItem("默认（不指定）", "")
+            self._qoder_model.addItems(models)
+            if current and current in models:
+                self._qoder_model.setCurrentText(current)
+            else:
+                self._qoder_model.setCurrentIndex(0)
+            self._qoder_model.blockSignals(False)
+        except Exception:
+            pass
 
     def _refresh_qoder_models(self):
         """获取当前 Qoder 账号可用模型，填入下拉框"""
@@ -2411,14 +2456,7 @@ class SettingsPage(QWidget):
                 )
                 return
             models = r.get("models") or []
-            current = self._qoder_model.currentText().strip()
-            self._qoder_model.clear()
-            self._qoder_model.addItem("默认（不指定）", "")
-            self._qoder_model.addItems(models)
-            if current and current in models:
-                self._qoder_model.setCurrentText(current)
-            else:
-                self._qoder_model.setCurrentIndex(0)
+            self._apply_qoder_models(models)
             QMessageBox.information(self, "Qoder 模型", f"已获取 {len(models)} 个模型")
         except Exception as e:
             QMessageBox.warning(self, "获取失败", str(e))
@@ -5514,6 +5552,8 @@ class MainWindow(QMainWindow):
 
     # 人脸识别完成后通知 UI 的信号（在主线程执行）
     _auth_done = pyqtSignal()
+    # Qoder 模型列表后台加载完成
+    _qoder_models_ready = pyqtSignal(list)
 
     def __init__(self, agent, db_file: str):
         super().__init__()
