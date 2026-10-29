@@ -580,7 +580,7 @@ class ChatPage(QWidget):
         self._pending_file = None   # 待发送的附件路径
         btn_attach = QPushButton("📎 文件")
         btn_attach.setFixedSize(56, 72)
-        btn_attach.setToolTip("上传图片或 Office 文件")
+        btn_attach.setToolTip("上传图片、视频或 Office 文件")
         btn_attach.setStyleSheet(
             "QPushButton{background:#21262d;border:1px solid #30363d;"
             "border-radius:8px;color:#8b949e;font-size:12px;padding:2px;}"
@@ -771,13 +771,15 @@ class ChatPage(QWidget):
             webbrowser.open("http://127.0.0.1:8769")
 
     def _pick_file(self):
-        """打开文件选择器，支持图片和 Office 文件"""
+        """打开文件选择器，支持图片、视频和 Office 文件"""
         path, _ = QFileDialog.getOpenFileName(
             self, "选择文件",
             str(Path.home()),
-            "图片和文档 (*.png *.jpg *.jpeg *.gif *.webp "
+            "图片、视频和文档 (*.png *.jpg *.jpeg *.gif *.webp "
+            "*.mp4 *.mov *.webm *.avi *.mkv "
             "*.docx *.xlsx *.pptx *.pdf *.csv *.txt *.md);;"
             "图片 (*.png *.jpg *.jpeg *.gif *.webp);;"
+            "视频 (*.mp4 *.mov *.webm *.avi *.mkv);;"
             "Office 文档 (*.docx *.xlsx *.pptx *.pdf *.csv)"
         )
         if path:
@@ -810,6 +812,7 @@ class ChatPage(QWidget):
         if pending:
             ext = Path(pending).suffix.lower()
             is_image = ext in (".png", ".jpg", ".jpeg", ".gif", ".webp")
+            is_video = ext in (".mp4", ".mov", ".webm", ".avi", ".mkv")
 
             if is_image:
                 # 显示图片气泡
@@ -820,6 +823,10 @@ class ChatPage(QWidget):
                     msg += f"\n{text}"
                 else:
                     msg += "\n请分析这张图片"
+            elif is_video:
+                # 视频文件：显示视频标记，交给多模态模型理解
+                self.add_user_message(f"🎬 {Path(pending).name}\n{text or '请描述这个视频的内容'}")
+                msg = f"[视频: {pending}]\n{text or '请描述这个视频的内容'}"
             else:
                 # 非图片文件：显示文件标记
                 self.add_user_message(f"📎 {Path(pending).name}\n{text or '请分析这个文件'}")
