@@ -168,6 +168,12 @@ RESPONSE_PROMPT = """你是{name}，请根据以下内容生成自然的回应�
 不要输出JSON，直接说话。回应要真实、有个性，体现你的人格特征。
 如果记忆中有相关内容，自然地融入回应中（不要生硬地说"根据我的记忆"）。"""
 
+# 渠道能力提示：只在对应渠道注入，告诉模型它能用的表达方式
+QQ_FACE_HINT = """【当前聊天渠道】QQ
+你可以发送 QQ 默认小黄脸，写法：[表情:名称] 或 [face:数字]，例如 [表情:微笑]、[表情:呲牙]、[表情:抠鼻]。
+常用表情ID：微笑14 呲牙13 调皮12 得意4 流泪5 害羞6 酷16 可爱21 偷笑20 疑问32 委屈49 亲亲52 强79 抱拳83 爱心66。
+规则：只在情绪合适时用，每句最多 2-3 个，不要每句都加；不要解释这些标记，直接输出。"""
+
 
 class ConsciousnessAgent:
     """A 层意识主体 v3"""
@@ -361,9 +367,10 @@ class ConsciousnessAgent:
             return ""
 
     def process(self, user_input: str, override_uid: str = "",
-                override_uname: str = "") -> Dict[str, Any]:
+                override_uname: str = "", channel: str = "") -> Dict[str, Any]:
         """完整交互流水线 v3
         override_uid / override_uname: 外部渠道（如企业微信）传入的用户身份覆盖
+        channel: 渠道标识（qq/lark/wecom/web），用于注入该渠道可用的表达方式
         """
         interaction_id = str(uuid.uuid4())[:8]
 
@@ -592,6 +599,10 @@ class ConsciousnessAgent:
             guest_notice = self.auth.guest_system_prompt()
             profile_context = (guest_notice + "\n\n" + profile_context).strip()
 
+        # 渠道能力提示（QQ 小黄脸等），只在该渠道注入
+        if channel == "qq":
+            profile_context = (QQ_FACE_HINT + "\n\n" + profile_context).strip()
+
         # 统计检索到的记忆数量
         total = 0
         for lv in ("summary", "outline", "detail"):
@@ -782,6 +793,7 @@ class ConsciousnessAgent:
                 download_dir.mkdir(parents=True, exist_ok=True)
                 _FILE_TYPES = ("docx", "xlsx", "pptx", "pdf")
                 _IMG_TYPES = ("png", "jpg", "jpeg", "webp", "gif", "image")
+                _VIDEO_TYPES = ("mp4", "mov", "webm", "avi", "mkv", "video")
 
                 def _publish(src, kind):
                     nonlocal tool_result_section
@@ -797,6 +809,9 @@ class ConsciousnessAgent:
                     if kind == "img":
                         tool_result_section += f"\n[image:{src.name}:{src.name}]"
                         self._log("图片", f"已发布: {src.name}")
+                    elif kind == "video":
+                        tool_result_section += f"\n视频已生成：\n[video:{src.name}:{src.name}]"
+                        self._log("视频", f"已发布: {src.name}")
                     else:
                         tool_result_section += (
                             f"\n文件已生成，用户可通过以下链接下载："
@@ -815,6 +830,8 @@ class ConsciousnessAgent:
                         _publish(file_path, "file")
                     if file_path and file_type in _IMG_TYPES:
                         _publish(file_path, "img")
+                    if file_path and file_type in _VIDEO_TYPES:
+                        _publish(file_path, "video")
                     for img in images:
                         if isinstance(img, dict):
                             img = img.get("path", "")
@@ -1091,6 +1108,37 @@ class ConsciousnessAgent:
                         file_context = f"【图片】路径：{img_path}（识别失败：{result.get('error','')}）"
             except Exception as e:
                 file_context = f"【图片】路径：{img_path}"
+
+        # 检测视频（[视频:路径] 标记，或 [文件:...mp4] 这类视频文件）
+        _VIDEO_EXTS = (".mp4", ".mov", ".webm", ".avi", ".mkv")
+        vid_match = re.search(r'\[视频:\s*(.+?)\]', user_input)
+        vid_path = vid_match.group(1).strip() if vid_match else ""
+        if vid_match:
+            user_input = user_input.replace(vid_match.group(0), "").strip()
+        else:
+            _fm = re.search(r'\[文件:\s*(.+?)\]', user_input)
+            if _fm and _fm.group(1).strip().lower().endswith(_VIDEO_EXTS):
+                vid_path = _fm.group(1).strip()
+                user_input = user_input.replace(_fm.group(0), "").strip()
+        if vid_path:
+            attachment_path = vid_path
+            try:
+                from engine.vision_client import create_vision_client
+                client = create_vision_client()
+                if client:
+                    result = client.analyze(vid_path,
+                                            question=user_input or "描述这个视频的内容")
+                    if result.get("ok"):
+                        file_context = (f"【视频识别结果】\n{result['description']}\n"
+                                        f"（视频文件：{vid_path}）")
+                        self._log("视频", f"识别成功：{result['description'][:80]}")
+                    else:
+                        file_context = (f"【视频】路径：{vid_path}"
+                                        f"（识别失败：{result.get('error','')}）")
+                else:
+                    file_context = f"【视频】路径：{vid_path}（未配置多模态模型，无法直接理解视频）"
+            except Exception as e:
+                file_context = f"【视频】路径：{vid_path}（识别异常：{e}）"
 
         # 检测文件
         file_match = re.search(r'\[文件:\s*(.+?)\]', user_input)

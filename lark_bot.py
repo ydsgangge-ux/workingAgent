@@ -350,8 +350,8 @@ class LarkBot:
                 message_id, chat_id, sender_id, text):
             return
 
-        # ② 文件/图片：先暂存，等用户下一句指令一起提交
-        if message_type in ("file", "image"):
+        # ② 文件/图片/视频：先暂存，等用户下一句指令一起提交
+        if message_type in ("file", "image", "media"):
             attachment, err = self._download_attachment(
                 message_id, message_type, content)
             if err:
@@ -366,7 +366,7 @@ class LarkBot:
             return
 
         if message_type != "text":
-            self._http.reply_text(message_id, "暂时只支持文本、文件、图片消息哦。")
+            self._http.reply_text(message_id, "暂时只支持文本、文件、图片、视频消息哦。")
             return
 
         # ③ 文字到达：合并刚收到的附件
@@ -379,15 +379,21 @@ class LarkBot:
     def _download_attachment(self, message_id, message_type, content):
         """下载附件到统一 inbox，返回 (附件标记, 错误信息)"""
         from engine.inbox import save_bytes
-        if message_type == "file":
+        if message_type in ("file", "media"):
             file_key = content.get("file_key", "")
             data = self._http.download(message_id, file_key, "file") if file_key else None
             if data is None:
                 return "", "文件下载失败，请稍后再试。"
             fname = (content.get("file_name") or "file").strip() or "file"
+            if message_type == "media" and not fname.lower().endswith(
+                    (".mp4", ".mov", ".webm", ".avi", ".mkv")):
+                fname = f"{fname}.mp4"
             path = save_bytes(data, fname)
             if not path:
                 return "", "文件保存失败，请稍后再试。"
+            if message_type == "media" or fname.lower().endswith(
+                    (".mp4", ".mov", ".webm", ".avi", ".mkv")):
+                return f"[视频:{path}]", ""
             return f"[文件:{path}]", ""
         else:
             image_key = content.get("image_key", "")
@@ -486,8 +492,10 @@ class LarkBot:
     def _deliver(self, chat_id: str, text: str) -> str:
         file_pat = re.compile(r"\[download:([^:\]]+):([^:\]]+)\]")
         image_pat = re.compile(r"\[image:([^:\]]+):([^:\]]+)\]")
+        video_pat = re.compile(r"\[video:([^:\]]+):([^:\]]+)\]")
         cleaned = file_pat.sub("", text)
-        cleaned = image_pat.sub("", cleaned).strip()
+        cleaned = image_pat.sub("", cleaned)
+        cleaned = video_pat.sub("", cleaned).strip()
 
         download_dir = Path(__file__).parent / "downloads"
         # 文件附件（原逻辑）
@@ -516,4 +524,17 @@ class LarkBot:
                 print(f"[LarkBot] 图片已发送到飞书: {file_name}")
             else:
                 cleaned += f"\n（图片无法在飞书发送，本地路径：{src}）"
+        # 视频（作为文件消息发送）
+        for m in video_pat.finditer(text):
+            file_name = m.group(1)
+            src = download_dir / file_name
+            if not src.exists():
+                print(f"[LarkBot] 待发送视频不存在: {src}")
+                cleaned += f"\n（视频丢失：{file_name}）"
+                continue
+            file_key = self._http.upload_file(str(src), file_name)
+            if file_key and self._http.send_file(chat_id, file_key):
+                print(f"[LarkBot] 视频已发送到飞书: {file_name}")
+            else:
+                cleaned += f"\n（视频无法在飞书发送，本地路径：{src}）"
         return cleaned

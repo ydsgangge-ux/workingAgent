@@ -7,10 +7,12 @@
 """
 
 import os
+import sys
 import uuid
 import time
 import random
 import json
+import base64
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -316,15 +318,7 @@ def generate_and_download(personality: dict, simlife_context: str = None) -> Opt
     prompt, image_type = build_image_prompt(personality, simlife_context=simlife_context)
     print(f"[图片生成] {image_type}: {prompt[:80]}...")
 
-    # 优先 Cogview
-    cogview_result = _generate_cogview(prompt)
-    if cogview_result:
-        return (prompt, cogview_result, image_type)
-
-    # 回退 pollinations
-    print("[图片生成] Cogview 不可用，回退 pollinations.ai")
-    url = generate_image_url(prompt)
-    image_path = download_image(url)
+    image_path = generate_image_with_prompt(prompt)
     if image_path:
         return (prompt, image_path, image_type)
     return None
@@ -333,13 +327,25 @@ def generate_and_download(personality: dict, simlife_context: str = None) -> Opt
 def generate_image_with_prompt(prompt: str, size: str = "1024x1024") -> Optional[str]:
     """
     用指定 prompt 生成图片（供工具/聊天调用）。
-    优先 Cogview，失败回退 pollinations。
+    按配置的 image_model 选择后端，失败回退 pollinations。
     返回图片本地路径或 None。
     """
-    # Cogview
-    cogview_result = _generate_cogview(prompt, size=size)
-    if cogview_result:
-        return cogview_result
+    cfg = _load_image_cfg()
+    model = (cfg.get("image_model") or "").strip()
+    key = (cfg.get("image_api_key") or "").strip()
+    base = (cfg.get("image_base_url") or "").strip()
+
+    if model:
+        path = _generate_by_model(prompt, size, model, key, base)
+        if path:
+            return path
+        print(f"[图片生成] 后端 {model} 失败，回退 pollinations.ai")
+    else:
+        # 未配置时沿用旧行为：智谱优先
+        path = _generate_cogview(prompt, size=size)
+        if path:
+            return path
+        print("[图片生成] Cogview 不可用，回退 pollinations.ai")
 
     # pollinations
     w, h = size.split("x")
@@ -379,7 +385,8 @@ def _get_zhipu_api_key() -> str:
     return ""
 
 
-def _generate_cogview(prompt: str, size: str = "1024x1024") -> Optional[str]:
+def _generate_cogview(prompt: str, size: str = "1024x1024",
+                      model: str = "cogview-3-flash") -> Optional[str]:
     """
     调用智谱 Cogview-3-Flash 生成图片。
     返回本地图片路径或 None。
@@ -390,7 +397,7 @@ def _generate_cogview(prompt: str, size: str = "1024x1024") -> Optional[str]:
 
     try:
         payload = json.dumps({
-            "model": "cogview-3-flash",
+            "model": model,
             "prompt": prompt,
             "size": size,
         }).encode("utf-8")
@@ -446,3 +453,179 @@ def _generate_cogview(prompt: str, size: str = "1024x1024") -> Optional[str]:
     except Exception as e:
         print(f"[图片生成] Cogview 异常: {e}")
         return None
+
+
+# ── 多品牌图片后端（配置项 image_model）────────────────────────
+
+IMAGE_PROVIDERS = {
+    "cogview-3-flash": "智谱 CogView-3-Flash（免费）",
+    "cogview-4": "智谱 CogView-4（付费）",
+    "pollinations": "Pollinations（免费，无需 Key）",
+    "gpt-image-1": "OpenAI gpt-image-1",
+    "dall-e-3": "OpenAI DALL·E 3",
+    "wanx": "阿里通义万相",
+    "seedream": "火山豆包 Seedream",
+    "flux": "硅基流动 FLUX",
+    "openai_compat": "OpenAI 兼容接口",
+}
+
+
+def _load_image_cfg() -> dict:
+    try:
+        from desktop.config import load_config
+        return load_config() or {}
+    except Exception:
+        return {}
+
+
+def _save_image_bytes(raw: bytes, prefix: str = "img", ext: str = "png") -> Optional[str]:
+    if not raw or len(raw) < 1000:
+        return None
+    path = get_image_dir() / (
+        f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.{ext}")
+    try:
+        path.write_bytes(raw)
+        print(f"[图片生成] 已保存: {path} ({len(raw)//1024}KB)")
+        return str(path)
+    except Exception as e:
+        print(f"[图片生成] 保存失败: {e}")
+        return None
+
+
+def _download_image_url(url: str, prefix: str = "img", ext: str = "png") -> Optional[str]:
+    if not url:
+        return None
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            return _save_image_bytes(resp.read(), prefix, ext)
+    except Exception as e:
+        print(f"[图片生成] 下载失败: {e}")
+        return None
+
+
+def _openai_compatible_image(prompt: str, size: str, key: str,
+                             base: str, model: str) -> Optional[str]:
+    """OpenAI 兼容的 /images/generations（OpenAI、火山 Seedream、硅基流动 FLUX 等）"""
+    _defaults = {
+        "seedream": ("https://ark.cn-beijing.volces.com/api/v3",
+                     "doubao-seedream-3-0-t2i-250415"),
+        "flux": ("https://api.siliconflow.cn/v1",
+                 "black-forest-labs/FLUX.1-schnell"),
+    }
+    if model in _defaults:
+        base = base or _defaults[model][0]
+        real_model = _defaults[model][1]
+    else:
+        base = base or "https://api.openai.com/v1"
+        real_model = model
+
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    payload = json.dumps({
+        "model": real_model, "prompt": prompt, "n": 1, "size": size,
+    }).encode("utf-8")
+    try:
+        req = urllib.request.Request(f"{base.rstrip('/')}/images/generations",
+                                     data=payload, headers=headers)
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")[:200]
+        except Exception:
+            pass
+        print(f"[图片生成] {model} HTTP {e.code}: {body}")
+        return None
+    except Exception as e:
+        print(f"[图片生成] {model} 异常: {e}")
+        return None
+
+    data = result.get("data") or []
+    if not data:
+        print(f"[图片生成] {model} 返回空数据: {str(result)[:200]}")
+        return None
+    item = data[0] or {}
+    if item.get("url"):
+        return _download_image_url(item["url"], model)
+    if item.get("b64_json"):
+        try:
+            return _save_image_bytes(base64.b64decode(item["b64_json"]), model)
+        except Exception as e:
+            print(f"[图片生成] b64 解码失败: {e}")
+    return None
+
+
+def _generate_wanx(prompt: str, size: str, key: str) -> Optional[str]:
+    """阿里通义万相（DashScope 异步任务）"""
+    if not key:
+        print("[图片生成] 缺少阿里 DashScope API Key")
+        return None
+    w, h = size.split("x")
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "X-DashScope-Async": "enable",
+    }
+    payload = json.dumps({
+        "model": "wanx2.1-t2i-turbo",
+        "input": {"prompt": prompt},
+        "parameters": {"size": f"{w}*{h}", "n": 1},
+    }).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis",
+            data=payload, headers=headers)
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        print(f"[图片生成] 通义万相 HTTP {e.code}")
+        return None
+    except Exception as e:
+        print(f"[图片生成] 通义万相异常: {e}")
+        return None
+
+    task_id = (result.get("output") or {}).get("task_id")
+    if not task_id:
+        print(f"[图片生成] 通义万相未返回 task_id: {str(result)[:200]}")
+        return None
+
+    deadline = time.time() + 180
+    while time.time() < deadline:
+        time.sleep(3)
+        try:
+            req = urllib.request.Request(
+                f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}",
+                headers={"Authorization": f"Bearer {key}"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                q = json.loads(resp.read().decode("utf-8"))
+            out = q.get("output") or {}
+            status = str(out.get("task_status", "")).upper()
+            if status == "SUCCEEDED":
+                results = out.get("results") or []
+                if results:
+                    return _download_image_url(results[0].get("url", ""), "wanx")
+                return None
+            if status in ("FAILED", "CANCELED"):
+                print(f"[图片生成] 通义万相任务失败: {str(q)[:200]}")
+                return None
+        except Exception:
+            continue
+    print("[图片生成] 通义万相轮询超时")
+    return None
+
+
+def _generate_by_model(prompt: str, size: str, model: str,
+                       key: str, base: str) -> Optional[str]:
+    """按 image_model 选择后端"""
+    if model == "pollinations":
+        w, h = size.split("x")
+        return download_image(generate_image_url(prompt, width=int(w), height=int(h)))
+    if model.startswith("cogview"):
+        return _generate_cogview(prompt, size=size, model=model)
+    if model == "wanx":
+        return _generate_wanx(prompt, size, key)
+    # OpenAI 兼容系（含 gpt-image-1 / dall-e-3 / seedream / flux / openai_compat / 自定义）
+    return _openai_compatible_image(prompt, size, key, base, model)

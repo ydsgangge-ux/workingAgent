@@ -1633,8 +1633,9 @@ def get_news_sources(country: str = "", language: str = "", category: str = "") 
 @register_tool(
     name="generate_image",
     description=(
-        "在线生成图片。优先使用智谱 Cogview-3-Flash（高质量、快速），"
-        "不可用时回退 pollinations.ai（免费备选）。"
+        "在线生成图片。默认按设置里的图片模型（首选智谱 CogView-3-Flash，免费），"
+        "也可在设置里切换 CogView-4、OpenAI、通义万相、Seedream、FLUX 等，"
+        "失败时自动回退 pollinations.ai。"
         "仅在 generate_image_comfy 不可用时作为备选。优先使用 generate_image_comfy。"
     ),
     parameters={
@@ -1672,6 +1673,42 @@ def generate_image(prompt: str, width: int = 1024, height: int = 1024, use_simli
             }
         else:
             return {"ok": False, "error": "图片生成或下载失败"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════
+# 视频生成工具（在线，默认 CogVideoX-Flash 免费）
+# ═══════════════════════════════════════════════════
+
+@register_tool(
+    name="generate_video",
+    description=(
+        "生成视频（文生视频）。默认使用智谱 CogVideoX-Flash（免费、无需额外配置），"
+        "也可在设置里切换到 CogVideoX-3、MiniMax 海螺、可灵、Runway、Luma、通义万相等。"
+        "生成较慢（通常 1-5 分钟），请耐心等待；返回本地 mp4 文件路径。"
+    ),
+    parameters={
+        "prompt": {"type": "string", "description": "视频画面描述，尽量具体：主体、动作、镜头、光线、氛围", "required": True},
+        "duration": {"type": "integer", "description": "时长（秒），默认 5，多数后端支持 5 或 10"},
+        "size": {"type": "string", "description": "分辨率，如 1280x720（默认）、720x1280、1920x1080"},
+    },
+    risk="low"
+)
+def generate_video(prompt: str, duration: int = 5, size: str = "1280x720") -> Dict:
+    try:
+        from engine.video_gen import generate_video as _generate
+        result = _generate(prompt, duration=duration, size=size)
+        if result.get("ok"):
+            return {
+                "ok": True,
+                "path": result["path"],
+                "type": "mp4",
+                "model": result.get("model"),
+                "prompt": prompt,
+                "message": f"视频已生成并保存到: {result['path']}",
+            }
+        return {"ok": False, "error": result.get("error", "视频生成失败")}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

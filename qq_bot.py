@@ -124,8 +124,9 @@ EMOJI_FACE = {
     "🍰": "68", "🍺": "57", "☕": "60", "⚽": "72", "🐷": "62",
 }
 
-# 回复里显式的表情标记：[face:14]
-FACE_TOKEN_RE = re.compile(r"\[face:(\d{1,4})\]")
+# 回复里显式的表情标记：[face:14] 或 [表情:呲牙]（模型更容易用名字）
+FACE_IDS = {v: k for k, v in FACE_NAMES.items()}
+FACE_TOKEN_RE = re.compile(r"\[(?:face|表情):([^\[\]:]{1,10})\]")
 FACE_MAX = 5          # 单条回复最多带 5 个表情，避免刷屏
 
 
@@ -371,6 +372,7 @@ class QQBot:
                     user_input,
                     override_uid=uid,
                     override_uname=f"QQ_{uname}"[:40],
+                    channel="qq",
                 )
             reply = (result.get("response") or result.get("reply")
                      or result.get("text") or "好的，我知道了。")
@@ -474,6 +476,14 @@ class QQBot:
                 path = self._save_image(data)
                 if path:
                     attachments.append(f"[图片:{path}]")
+            elif t == "video":
+                path = self._save_media(
+                    str(data.get("url", "")),
+                    str(data.get("file", "")),
+                    "video", "mp4",
+                    data.get("file_name") or data.get("name") or "")
+                if path:
+                    attachments.append(f"[视频:{path}]")
             elif t == "file":
                 path = self._save_file(data)
                 if path:
@@ -601,7 +611,10 @@ class QQBot:
         for m in FACE_TOKEN_RE.finditer(text):
             if m.start() > pos:
                 toks.extend(QQBot._emoji_tokens(text[pos:m.start()]))
-            toks.append(("face", m.group(1)))
+            raw = m.group(1).strip()
+            fid = raw if raw.isdigit() else FACE_IDS.get(raw, "")
+            if fid:
+                toks.append(("face", fid))
             pos = m.end()
         if pos < len(text):
             toks.extend(QQBot._emoji_tokens(text[pos:]))
@@ -648,11 +661,13 @@ class QQBot:
         return chunks
 
     def _deliver(self, kind: str, target: str, text: str) -> str:
-        """把 [download:文件名:显示名] / [image:文件名:显示名] 发送为真实文件/图片"""
+        """把 [download:文件名:显示名] / [image:...] / [video:...] 发送为真实文件/图片/视频"""
         file_pat = re.compile(r"\[download:([^:\]]+):([^:\]]+)\]")
         image_pat = re.compile(r"\[image:([^:\]]+):([^:\]]+)\]")
+        video_pat = re.compile(r"\[video:([^:\]]+):([^:\]]+)\]")
         cleaned = file_pat.sub("", text)
-        cleaned = image_pat.sub("", cleaned).strip()
+        cleaned = image_pat.sub("", cleaned)
+        cleaned = video_pat.sub("", cleaned).strip()
 
         download_dir = Path(__file__).parent / "downloads"
         for m in file_pat.finditer(text):
@@ -675,6 +690,21 @@ class QQBot:
                 continue
             seg = {"type": "image", "data": {"file": f"base64://{b64}"}}
             self._send_group_or_private(kind, target, [seg])
+        for m in video_pat.finditer(text):
+            src = download_dir / m.group(1)
+            if not src.exists():
+                cleaned += f"\n（视频丢失：{m.group(1)}）"
+                continue
+            seg = {"type": "video",
+                   "data": {"file": src.resolve().as_uri(), "name": m.group(2)}}
+            try:
+                self._send_group_or_private(kind, target, [seg])
+            except Exception as e:
+                # 视频段不被支持时，退回普通文件发送
+                print(f"[QQBot] 视频段发送失败，改发文件: {e}")
+                seg = {"type": "file",
+                       "data": {"file": src.resolve().as_uri(), "name": m.group(2)}}
+                self._send_group_or_private(kind, target, [seg])
         return cleaned
 
     def _send_group_or_private(self, kind: str, target: str, segs: list):

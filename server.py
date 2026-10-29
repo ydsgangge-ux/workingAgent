@@ -1267,6 +1267,38 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
       </div>
 
       <div class="card">
+        <div class="section-title">🎨 图片生成（Image）</div>
+        <div class="field">
+          <label>模型</label>
+          <select id="cfg-image-model" class="input"></select>
+        </div>
+        <div class="field">
+          <label>API Key（留空继承智谱/主 LLM）</label>
+          <input id="cfg-image-apikey" class="input" type="password" placeholder="留空则自动复用已有 Key">
+        </div>
+        <div class="field">
+          <label>自定义地址（留空用默认）</label>
+          <input id="cfg-image-url" class="input" type="text" placeholder="仅 OpenAI 兼容接口需要">
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">🎬 视频生成（Video）</div>
+        <div class="field">
+          <label>模型</label>
+          <select id="cfg-video-model" class="input"></select>
+        </div>
+        <div class="field">
+          <label>API Key（留空继承智谱/主 LLM；可灵填 ak|sk）</label>
+          <input id="cfg-video-apikey" class="input" type="password" placeholder="可灵格式：access_key|secret_key">
+        </div>
+        <div class="field">
+          <label>自定义地址（仅 OpenAI 兼容接口）</label>
+          <input id="cfg-video-url" class="input" type="text">
+        </div>
+      </div>
+
+      <div class="card">
         <div class="section-title">🔊 语音合成（TTS）</div>
         <div class="toggle">
           <span class="toggle-label">回复后自动朗读</span>
@@ -2004,6 +2036,12 @@ function addRow(who,text,imgUrl){
   bubble=bubble.replace(/\[img:(https?:\/\/[^\s\]]+|[\/\w\-\.]+)\]/g,function(m,url){
     return '<img class="chat-img" src="'+url+'" onclick="window.open(this.src)" loading="lazy">';
   });
+  // 渲染 [video:文件名:显示名] 标记为可播放视频
+  bubble=bubble.replace(/\[video:(.*?):(.*?)\]/g,function(m,path,name){
+    var vsrc='/api/download/'+encodeURIComponent(path);
+    return '<video class="chat-video" src="'+vsrc+'" controls preload="metadata" style="max-width:100%;border-radius:8px;display:block;margin:6px 0;"></video>'+
+           '<a class="download-link" href="'+vsrc+'" download>🎬 下载 '+esc(name)+'</a>';
+  });
   // 渲染 [download:文件名:显示名] 标记为下载链接
   bubble=bubble.replace(/\[download:(.*?):(.*?)\]/g,function(m,path,name){
     return '<a class="download-link" href="/api/download/'+encodeURIComponent(path)+'" download>📎 下载 '+esc(name)+'</a>';
@@ -2062,6 +2100,20 @@ async function loadSettings(){
     document.getElementById('cfg-vision-model').value=cfg.vision_model||'';
     document.getElementById('cfg-vision-apikey').value=cfg.vision_api_key||'';
     document.getElementById('cfg-vision-url').value=cfg.vision_base_url||'';
+    // Image：图片生成模型
+    var IMG_OPTS={'cogview-3-flash':'智谱 CogView-3-Flash（免费）','cogview-4':'智谱 CogView-4（付费）','pollinations':'Pollinations（免费，无需 Key）','gpt-image-1':'OpenAI gpt-image-1','dall-e-3':'OpenAI DALL·E 3','wanx':'阿里通义万相','seedream':'火山豆包 Seedream','flux':'硅基流动 FLUX','openai_compat':'OpenAI 兼容接口'};
+    var imsel=document.getElementById('cfg-image-model');imsel.innerHTML='';
+    for(var mk in IMG_OPTS){var mo=document.createElement('option');mo.value=mk;mo.textContent=IMG_OPTS[mk];imsel.appendChild(mo);}
+    imsel.value=cfg.image_model||'cogview-3-flash';
+    document.getElementById('cfg-image-apikey').value=cfg.image_api_key||'';
+    document.getElementById('cfg-image-url').value=cfg.image_base_url||'';
+    // Video：视频生成模型
+    var VID_OPTS={'cogvideox-flash':'智谱 CogVideoX-Flash（免费）','cogvideox-3':'智谱 CogVideoX-3（付费）','minimax':'MiniMax 海螺','kling':'可灵 Kling','runway':'Runway Gen-4','luma':'Luma Dream Machine','wanx':'阿里通义万相','openai_compat':'OpenAI 兼容接口'};
+    var vdsel=document.getElementById('cfg-video-model');vdsel.innerHTML='';
+    for(var vk2 in VID_OPTS){var vo=document.createElement('option');vo.value=vk2;vo.textContent=VID_OPTS[vk2];vdsel.appendChild(vo);}
+    vdsel.value=cfg.video_model||'cogvideox-flash';
+    document.getElementById('cfg-video-apikey').value=cfg.video_api_key||'';
+    document.getElementById('cfg-video-url').value=cfg.video_base_url||'';
     // TTS
     document.getElementById('cfg-tts-enable').checked=cfg.tts_enabled||false;
     var vsel2=document.getElementById('cfg-tts-voice');
@@ -2110,6 +2162,12 @@ async function saveSettings(){
   cfg.vision_model=document.getElementById('cfg-vision-model').value.trim();
   cfg.vision_api_key=document.getElementById('cfg-vision-apikey').value.trim();
   cfg.vision_base_url=document.getElementById('cfg-vision-url').value.trim();
+  cfg.image_model=document.getElementById('cfg-image-model').value;
+  cfg.image_api_key=document.getElementById('cfg-image-apikey').value.trim();
+  cfg.image_base_url=document.getElementById('cfg-image-url').value.trim();
+  cfg.video_model=document.getElementById('cfg-video-model').value;
+  cfg.video_api_key=document.getElementById('cfg-video-apikey').value.trim();
+  cfg.video_base_url=document.getElementById('cfg-video-url').value.trim();
   cfg.tts_enabled=document.getElementById('cfg-tts-enable').checked;
   cfg.tts_voice=document.getElementById('cfg-tts-voice').value;
   cfg.tts_rate=parseInt(document.getElementById('cfg-tts-rate').value);

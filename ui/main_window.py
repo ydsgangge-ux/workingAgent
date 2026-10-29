@@ -1652,6 +1652,71 @@ class SettingsPage(QWidget):
         # 初始化 vision provider 状态
         self._on_vision_provider_changed(self._vision_provider.currentIndex())
 
+        # ── 图片 / 视频生成（Media Gen）──
+        from engine.image_gen import IMAGE_PROVIDERS
+        from engine.video_gen import VIDEO_PROVIDERS
+
+        media_box = QGroupBox("🎨 图片 / 视频生成")
+        media_lay = QGridLayout(media_box)
+
+        media_desc = QLabel(
+            "图片、视频生成各自独立配置，留空 Key 时自动继承智谱（GLM）Key。\n"
+            "免费首选：图片 CogView-3-Flash，视频 CogVideoX-Flash。"
+        )
+        media_desc.setStyleSheet("color:#8b949e;font-size:11px;")
+        media_desc.setWordWrap(True)
+        media_lay.addWidget(media_desc, 0, 0, 1, 2)
+
+        media_lay.addWidget(QLabel("图片模型:"), 1, 0)
+        self._image_model = QComboBox()
+        self._image_model.setStyleSheet(COMBO_STYLE)
+        self._image_model.setEditable(True)
+        for _k, _n in IMAGE_PROVIDERS.items():
+            self._image_model.addItem(_n, _k)
+        _saved_img = self._cfg.get("image_model") or "cogview-3-flash"
+        _idx = self._image_model.findData(_saved_img)
+        if _idx >= 0:
+            self._image_model.setCurrentIndex(_idx)
+        else:
+            self._image_model.setCurrentText(_saved_img)
+        media_lay.addWidget(self._image_model, 1, 1)
+
+        media_lay.addWidget(QLabel("图片 API Key:"), 2, 0)
+        self._image_api_key = QLineEdit(self._cfg.get("image_api_key", ""))
+        self._image_api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._image_api_key.setPlaceholderText("留空继承智谱 Key")
+        media_lay.addWidget(self._image_api_key, 2, 1)
+
+        media_lay.addWidget(QLabel("图片自定义地址:"), 3, 0)
+        self._image_base_url = QLineEdit(self._cfg.get("image_base_url", ""))
+        self._image_base_url.setPlaceholderText("留空使用默认地址")
+        media_lay.addWidget(self._image_base_url, 3, 1)
+
+        media_lay.addWidget(QLabel("视频模型:"), 4, 0)
+        self._video_model = QComboBox()
+        self._video_model.setStyleSheet(COMBO_STYLE)
+        self._video_model.setEditable(True)
+        for _k, _n in VIDEO_PROVIDERS.items():
+            self._video_model.addItem(_n, _k)
+        _saved_vid = self._cfg.get("video_model") or "cogvideox-flash"
+        _idx = self._video_model.findData(_saved_vid)
+        if _idx >= 0:
+            self._video_model.setCurrentIndex(_idx)
+        else:
+            self._video_model.setCurrentText(_saved_vid)
+        media_lay.addWidget(self._video_model, 4, 1)
+
+        media_lay.addWidget(QLabel("视频 API Key:"), 5, 0)
+        self._video_api_key = QLineEdit(self._cfg.get("video_api_key", ""))
+        self._video_api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._video_api_key.setPlaceholderText("留空继承智谱 Key；可灵填 ak|sk")
+        media_lay.addWidget(self._video_api_key, 5, 1)
+
+        media_lay.addWidget(QLabel("视频自定义地址:"), 6, 0)
+        self._video_base_url = QLineEdit(self._cfg.get("video_base_url", ""))
+        self._video_base_url.setPlaceholderText("留空使用默认地址")
+        media_lay.addWidget(self._video_base_url, 6, 1)
+
         # Ollama 额外设置（只有选 Ollama 时显示）
         self._ollama_widget = QWidget()
         ol_lay = QGridLayout(self._ollama_widget)
@@ -2169,6 +2234,7 @@ class SettingsPage(QWidget):
 
         layout.addWidget(api_box)
         layout.addWidget(vision_box)
+        layout.addWidget(media_box)
         layout.addWidget(hotkey_box)
         layout.addWidget(win_box)
         layout.addWidget(tts_box)
@@ -2355,6 +2421,13 @@ class SettingsPage(QWidget):
         self._cfg["vision_model"]      = self._vision_model.currentText().strip()
         self._cfg["vision_api_key"]    = self._vision_api_key.text().strip()
         self._cfg["vision_base_url"]   = self._vision_base_url.text().strip()
+        # 图片 / 视频生成
+        self._cfg["image_model"]       = self._image_model.currentData() or self._image_model.currentText().strip()
+        self._cfg["image_api_key"]     = self._image_api_key.text().strip()
+        self._cfg["image_base_url"]    = self._image_base_url.text().strip()
+        self._cfg["video_model"]       = self._video_model.currentData() or self._video_model.currentText().strip()
+        self._cfg["video_api_key"]     = self._video_api_key.text().strip()
+        self._cfg["video_base_url"]    = self._video_base_url.text().strip()
         # 企业微信机器人
         self._cfg["wecom_bot_id"]      = self._wecom_bot_id.text().strip()
         self._cfg["wecom_bot_secret"]  = self._wecom_bot_secret.text().strip()
