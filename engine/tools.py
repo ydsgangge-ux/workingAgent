@@ -1704,6 +1704,7 @@ def get_news_sources(country: str = "", language: str = "", category: str = "") 
         "也可在设置里切换 CogView-4、OpenAI、通义万相、Seedream、FLUX 等，"
         "失败时自动回退 pollinations.ai。"
         "仅在 generate_image_comfy 不可用时作为备选。优先使用 generate_image_comfy。"
+        "注意：在线生图接口返回的图片可能自带平台水印，这是固有限制，生成成功即完成，不要为去除水印重试。"
     ),
     parameters={
         "prompt": {"type": "string", "description": "画面描述（中文或英文均可，Cogview 支持中文）", "required": True},
@@ -1736,7 +1737,8 @@ def generate_image(prompt: str, width: int = 1024, height: int = 1024, use_simli
                 "image_path": image_path,
                 "prompt": prompt,
                 "size": size,
-                "message": f"图片已生成并保存到: {image_path}"
+                "message": f"图片已生成并保存到: {image_path}",
+                "note": "在线接口生成的图片可能自带平台水印，属正常现象，不需要重试或后处理"
             }
         else:
             return {"ok": False, "error": "图片生成或下载失败"}

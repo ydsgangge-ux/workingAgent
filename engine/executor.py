@@ -23,6 +23,16 @@ from engine.plan import parse_plan_text
 from engine.validator import validate_tool_output
 
 
+# 计划生成的硬性约束：API 生图/生视频自带水印，不得作为验收或修复项
+_PLAN_RULES = (
+    "【硬性约束】\n"
+    "- 图片/视频生成任务最多 2 步：1) 调用生成工具；2) 汇报并把产物交给用户。\n"
+    "- 禁止安排\"检查水印/去水印/裁剪修补/换后端重生成\"这类步骤。\n"
+    "- 生图生视频接口自带平台水印属于固有限制，不是验收标准。\n"
+    "- 验收最多 2 项关键检查（文件是否存在、大小是否正常），确认后立即结束。"
+)
+
+
 # ── 风险确认回调类型 ─────────────────────────────────────
 # 签名：(tool_name, params) -> bool
 # 返回 True 表示允许执行，False 表示拒绝
@@ -575,7 +585,7 @@ class BLayerExecutor:
             if msg.get("content"):
                 blocks.append({"type": "text", "text": msg["content"]})
 
-            for tc in msg.get("tool_calls", []):
+            for tc in (msg.get("tool_calls") or []):
                 try:
                     args = json.loads(tc["function"]["arguments"])
                 except Exception:
@@ -903,14 +913,16 @@ class BLayerExecutor:
                     f"请基于这些已完成的结果，只列出**尚未完成**的剩余步骤，"
                     f"禁止重复已完成动作，禁止再次调用已完成的工具，"
                     f"不要重新规划整件事。如果原目标已经达成，只输出：无需继续。\n"
-                    f"只用编号列表输出，不要解释：\n1. 步骤一\n2. 步骤二\n\n"
+                    f"只用编号列表输出，不要解释：\n1. 步骤一\n2. 步骤二\n"
+                    f"{_PLAN_RULES}\n\n"
                     f"原始任务：{task[:800]}"
                 )
             else:
                 plan_prompt = (
                     f"请为下面这个任务制定一个按顺序执行的操作计划。\n"
                     f"只用编号列表输出，不要任何解释或引言：\n"
-                    f"1. 步骤一\n2. 步骤二\n...\n\n任务：{task[:500]}"
+                    f"1. 步骤一\n2. 步骤二\n...\n"
+                    f"{_PLAN_RULES}\n\n任务：{task[:500]}"
                 )
             raw = self.generate(
                 prompt=plan_prompt,
@@ -1093,7 +1105,10 @@ class BLayerExecutor:
 9. 回答必须基于工具返回的真实数据，直接引用原始内容，禁止用"通常""可能""应该"等推测性语言编造内容
 10. 【达标即断】检索/调研类任务，一旦命中目标任务所需的关键参数/字段/结论，立即停止继续搜索，直接基于已有数据完成最终产出；只有关键信息确实缺失时才继续挖掘官方专页/一手数据
 11. 【官网优先联动】web_search 命中官网/官方文档(域名如 docs.* / *.cn / 官方站)后，用 fetch_url 或 browser_action 直接抓取该页一手数据，不要反复盲搜多轮；模糊型号名可用 exact=true 精确短语重搜
-12. 【交叉验证与出处】关键数据至少用两个不同来源核对；最终输出必须标注出处(来源URL/来源名)，对易混字段标注数据口径（如"该项为XX模型同源数据"），禁止无出处的编造"""
+12. 【交叉验证与出处】关键数据至少用两个不同来源核对；最终输出必须标注出处(来源URL/来源名)，对易混字段标注数据口径（如"该项为XX模型同源数据"），禁止无出处的编造
+13. 【图片/视频任务】调用 generate_image / generate_video 成功且文件存在，即视为任务完成，直接汇报。
+    生图/生视频 API 返回的图片视频自带平台水印或"AI生成"标识，这是接口固有限制，不是失败，也不是验收项。
+    禁止因为水印去重新生成、换后端、调 analyze_image 复核水印、写脚本裁剪或修补水印。"""
 
         if context:
             base += f"\n\n任务背景：\n{context}"
