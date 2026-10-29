@@ -1779,10 +1779,29 @@ class SettingsPage(QWidget):
         _qoder_row_lay.addWidget(self._qoder_max_turns)
         qoder_lay.addWidget(_qoder_row, 5, 1)
 
+        qoder_lay.addWidget(QLabel("模型:"), 6, 0)
+        _qoder_model_row = QWidget()
+        _qoder_model_lay = QHBoxLayout(_qoder_model_row)
+        _qoder_model_lay.setContentsMargins(0, 0, 0, 0)
+        self._qoder_model = QComboBox()
+        self._qoder_model.setStyleSheet(COMBO_STYLE)
+        self._qoder_model.setEditable(True)
+        self._qoder_model.addItem("默认（不指定）", "")
+        _qmodel = (self._cfg.get("qoder_model") or "").strip()
+        if _qmodel:
+            self._qoder_model.setEditText(_qmodel)
+        _qoder_model_lay.addWidget(self._qoder_model, 1)
+        _qoder_model_btn = QPushButton("🔄")
+        _qoder_model_btn.setFixedWidth(32)
+        _qoder_model_btn.setToolTip("获取当前账号可用模型列表（需已登录）")
+        _qoder_model_btn.clicked.connect(self._refresh_qoder_models)
+        _qoder_model_lay.addWidget(_qoder_model_btn)
+        qoder_lay.addWidget(_qoder_model_row, 6, 1)
+
         _qoder_check_btn = QPushButton("🔍 检测 Qoder CLI")
         _qoder_check_btn.setFixedHeight(28)
         _qoder_check_btn.clicked.connect(self._check_qoder_cli)
-        qoder_lay.addWidget(_qoder_check_btn, 6, 1)
+        qoder_lay.addWidget(_qoder_check_btn, 7, 1)
 
         # Ollama 额外设置（只有选 Ollama 时显示）
         self._ollama_widget = QWidget()
@@ -2376,6 +2395,34 @@ class SettingsPage(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "检测失败", str(e))
 
+    def _refresh_qoder_models(self):
+        """获取当前 Qoder 账号可用模型，填入下拉框"""
+        try:
+            from engine.qoder_cli import list_models
+            cfg = dict(self._cfg)
+            cfg["qoder_cli_path"] = (self._qoder_cli_path.text().strip()
+                                     or "qoder")
+            cfg["qoder_token"] = self._qoder_token.text().strip()
+            r = list_models(cfg)
+            if not r.get("ok"):
+                QMessageBox.warning(
+                    self, "未能获取模型列表",
+                    r.get("error") or r.get("raw") or "请先 qoder login 再试",
+                )
+                return
+            models = r.get("models") or []
+            current = self._qoder_model.currentText().strip()
+            self._qoder_model.clear()
+            self._qoder_model.addItem("默认（不指定）", "")
+            self._qoder_model.addItems(models)
+            if current and current in models:
+                self._qoder_model.setCurrentText(current)
+            else:
+                self._qoder_model.setCurrentIndex(0)
+            QMessageBox.information(self, "Qoder 模型", f"已获取 {len(models)} 个模型")
+        except Exception as e:
+            QMessageBox.warning(self, "获取失败", str(e))
+
     def _on_vision_provider_changed(self, idx: int):
         from engine.vision_client import VISION_PROVIDER_INFO
         key = self._vision_provider.itemData(idx) or ""
@@ -2527,6 +2574,8 @@ class SettingsPage(QWidget):
         self._cfg["qoder_default_repo"]    = self._qoder_default_repo.text().strip()
         self._cfg["qoder_permission_mode"] = (self._qoder_permission_mode.currentData()
                                               or "accept_edits")
+        _qm = self._qoder_model.currentText().strip()
+        self._cfg["qoder_model"] = "" if _qm.startswith("默认") else _qm
         try:
             self._cfg["qoder_timeout"] = int(self._qoder_timeout.text().strip() or 900)
         except ValueError:

@@ -93,6 +93,7 @@ DEFAULT_CONFIG = {
     "qoder_token":          "",             # PAT，留空复用本机 qoder login
     "qoder_default_repo":   "",             # 默认仓库目录，留空用项目根目录
     "qoder_permission_mode": "accept_edits",  # default/accept_edits/auto/bypass_permissions
+    "qoder_model":          "",             # 留空用账号默认模型；填 -m 的模型名
     "qoder_max_turns":      20,             # 单次最大轮数
     "qoder_timeout":        900,            # 超时秒数
 }

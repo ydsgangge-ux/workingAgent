@@ -514,17 +514,35 @@ def run_command(command: str, cwd: str = None, timeout: int = 30) -> Dict:
                     "description": "超时秒数，默认取配置（900）"},
         "permission_mode": {"type": "string",
                             "description": "权限模式：default/accept_edits/auto/bypass_permissions，默认 accept_edits"},
+        "model": {"type": "string",
+                  "description": "Qoder 模型名（对应 -m），留空用配置/账号默认模型"},
         "max_turns": {"type": "integer",
                       "description": "最大对话轮数，默认取配置（20）"}
     },
     risk="high"
 )
 def delegate_coding_task(task: str, repo: str = "", timeout: int = 0,
-                         permission_mode: str = "", max_turns: int = 0) -> Dict:
+                         permission_mode: str = "", max_turns: int = 0,
+                         model: str = "") -> Dict:
     try:
         from engine.qoder_cli import run_task
         return run_task(task, repo=repo, timeout=timeout,
-                        permission_mode=permission_mode, max_turns=max_turns)
+                        permission_mode=permission_mode, max_turns=max_turns,
+                        model=model)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@register_tool(
+    name="list_qoder_models",
+    description="列出当前 Qoder 账号可用的模型（需已登录），用于挑选免费/付费模型后再委派任务。",
+    parameters={},
+    risk="low"
+)
+def list_qoder_models() -> Dict:
+    try:
+        from engine.qoder_cli import list_models
+        return list_models()
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

@@ -1323,6 +1323,10 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
           </select>
         </div>
         <div class="field">
+          <label>模型（-m，留空用账号默认）</label>
+          <input id="cfg-qoder-model" class="input" type="text" placeholder="例如 qwen3-coder-plus；可用 qoderclicn --list-models 查看">
+        </div>
+        <div class="field">
           <label>超时（秒）</label>
           <input id="cfg-qoder-timeout" class="input" type="number" min="60" max="3600">
         </div>
@@ -2153,6 +2157,7 @@ async function loadSettings(){
     document.getElementById('cfg-qoder-token').value=cfg.qoder_token||'';
     document.getElementById('cfg-qoder-repo').value=cfg.qoder_default_repo||'';
     document.getElementById('cfg-qoder-mode').value=cfg.qoder_permission_mode||'accept_edits';
+    document.getElementById('cfg-qoder-model').value=cfg.qoder_model||'';
     document.getElementById('cfg-qoder-timeout').value=cfg.qoder_timeout||900;
     document.getElementById('cfg-qoder-maxturns').value=cfg.qoder_max_turns||20;
     // TTS
@@ -2213,6 +2218,7 @@ async function saveSettings(){
   cfg.qoder_token=document.getElementById('cfg-qoder-token').value.trim();
   cfg.qoder_default_repo=document.getElementById('cfg-qoder-repo').value.trim();
   cfg.qoder_permission_mode=document.getElementById('cfg-qoder-mode').value;
+  cfg.qoder_model=document.getElementById('cfg-qoder-model').value.trim();
   cfg.qoder_timeout=parseInt(document.getElementById('cfg-qoder-timeout').value)||900;
   cfg.qoder_max_turns=parseInt(document.getElementById('cfg-qoder-maxturns').value)||20;
   cfg.tts_enabled=document.getElementById('cfg-tts-enable').checked;

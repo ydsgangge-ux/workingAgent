@@ -175,7 +175,8 @@ def _handle_event(obj: Dict, state: Dict):
 
 
 def run_task(task: str, repo: str = "", timeout: int = 0,
-             permission_mode: str = "", max_turns: int = 0) -> Dict:
+             permission_mode: str = "", max_turns: int = 0,
+             model: str = "") -> Dict:
     """调用 Qoder CLI 执行一个编码任务。
 
     返回：
@@ -199,6 +200,7 @@ def run_task(task: str, repo: str = "", timeout: int = 0,
             or DEFAULT_PERMISSION).strip()
     turns = int(max_turns or cfg.get("qoder_max_turns") or DEFAULT_MAX_TURNS)
     limit = int(timeout or cfg.get("qoder_timeout") or DEFAULT_TIMEOUT)
+    model_name = (model or cfg.get("qoder_model") or "").strip()
 
     cmd = [
         cli, "-p", task,
@@ -206,6 +208,8 @@ def run_task(task: str, repo: str = "", timeout: int = 0,
         "--permission-mode", mode,
         "--cwd", repo_path,
     ]
+    if model_name:
+        cmd += ["-m", model_name]
     # 国内版 1.1.x 没有 --max-turns，按 help 自适应，避免未知参数直接失败
     if turns and "--max-turns" in _cli_help(cli):
         cmd += ["--max-turns", str(turns)]
@@ -336,6 +340,7 @@ def run_task(task: str, repo: str = "", timeout: int = 0,
         "elapsed": elapsed,
         "permission_mode": mode,
         "max_turns": turns,
+        "model": model_name or "default",
     }
     if state["cost_usd"] is not None:
         out["cost_usd"] = state["cost_usd"]
@@ -383,5 +388,43 @@ def check_qoder(cfg: Optional[Dict] = None) -> Dict:
         "permission_mode": cfg.get("qoder_permission_mode") or DEFAULT_PERMISSION,
         "max_turns": cfg.get("qoder_max_turns") or DEFAULT_MAX_TURNS,
         "timeout": cfg.get("qoder_timeout") or DEFAULT_TIMEOUT,
+        "model": cfg.get("qoder_model") or "default",
         "tip": "首次使用需 qoder login，或配置 qoder_token（PAT）",
+    }
+
+
+def list_models(cfg: Optional[Dict] = None) -> Dict:
+    """列出当前账号可用的模型（需要已登录）"""
+    cfg = cfg if cfg is not None else _load_cfg()
+    cli = resolve_cli(cfg)
+    if not cli:
+        return {"ok": False, "installed": False, "error": INSTALL_HINT}
+
+    try:
+        r = subprocess.run(
+            [cli, "--list-models"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=60, shell=False,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"执行 --list-models 失败：{e}"}
+
+    raw = ((r.stdout or "") + ("\n" + r.stderr if r.stderr else "")).strip()
+    models: List[str] = []
+    for line in raw.splitlines():
+        s = line.strip().strip("*-• \t")
+        if not s:
+            continue
+        low = s.lower()
+        if low.startswith(("available", "usage", "error", "model", "account")):
+            continue
+        if s.startswith("[") or "warning" in low or "eperm" in low:
+            continue
+        if s not in models:
+            models.append(s)
+    return {
+        "ok": r.returncode == 0 and bool(models),
+        "models": models,
+        "raw": raw[:6000],
+        "error": "" if r.returncode == 0 else (r.stderr or "获取模型列表失败，请先登录"),
     }
