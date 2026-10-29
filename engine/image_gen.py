@@ -386,12 +386,14 @@ def _get_zhipu_api_key() -> str:
 
 
 def _generate_cogview(prompt: str, size: str = "1024x1024",
-                      model: str = "cogview-3-flash") -> Optional[str]:
+                      model: str = "cogview-3-flash",
+                      api_key: str = "") -> Optional[str]:
     """
     调用智谱 Cogview-3-Flash 生成图片。
+    api_key 为空时才回退到主 LLM / 环境变量里的智谱 Key。
     返回本地图片路径或 None。
     """
-    api_key = _get_zhipu_api_key()
+    api_key = (api_key or "").strip() or _get_zhipu_api_key()
     if not api_key:
         return None
 
@@ -624,7 +626,8 @@ def _generate_by_model(prompt: str, size: str, model: str,
         w, h = size.split("x")
         return download_image(generate_image_url(prompt, width=int(w), height=int(h)))
     if model.startswith("cogview"):
-        return _generate_cogview(prompt, size=size, model=model)
+        return _generate_cogview(prompt, size=size, model=model,
+                                 api_key=key)
     if model == "wanx":
         return _generate_wanx(prompt, size, key)
     # OpenAI 兼容系（含 gpt-image-1 / dall-e-3 / seedream / flux / openai_compat / 自定义）

@@ -90,19 +90,46 @@ def _get_key(cfg: Dict, provider: str) -> str:
     return cfg.get("api_key", "") or ""
 
 
+def _request_json(req: urllib.request.Request, timeout: int = 60) -> Dict:
+    """带 429/5xx 退避重试的 JSON 请求（免费模型高峰期经常 429）"""
+    last = ""
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", "ignore")[:300]
+            except Exception:
+                pass
+            last = f"HTTP {e.code}: {body}"
+            if e.code in (429, 500, 502, 503, 504) and attempt < 3:
+                wait = 5 * (attempt + 1)
+                print(f"[视频生成] 接口繁忙（HTTP {e.code}），{wait}s 后重试")
+                time.sleep(wait)
+                continue
+            raise
+        except Exception as e:
+            last = f"{type(e).__name__}: {e}"
+            if attempt < 3:
+                time.sleep(3 * (attempt + 1))
+                continue
+            raise
+    raise RuntimeError(last or "请求失败")
+
+
 def _post_json(url: str, payload: Dict, headers: Dict, timeout: int = 60) -> Dict:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=data,
         headers={"Content-Type": "application/json", **headers})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    return _request_json(req, timeout=timeout)
 
 
 def _get_json(url: str, headers: Dict, timeout: int = 60) -> Dict:
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    return _request_json(req, timeout=timeout)
 
 
 def _download(url: str, model: str) -> Optional[str]:
@@ -147,8 +174,6 @@ def _gen_glm(prompt: str, model: str, size: str, duration: int,
     payload = {"model": model, "prompt": prompt}
     if size:
         payload["size"] = size
-    if duration:
-        payload["duration"] = duration
     if image_url:
         payload["image_url"] = image_url
     if not key:
@@ -441,6 +466,10 @@ def generate_video(prompt: str, duration: int = 5, size: str = "1280x720",
             body = e.read().decode("utf-8", "ignore")[:300]
         except Exception:
             pass
+        if e.code == 429:
+            return {"ok": False,
+                    "error": f"视频接口当前限流（HTTP 429，免费模型访问量过大），"
+                             f"请稍后重试。{body}"}
         return {"ok": False, "error": f"HTTP {e.code}: {body}"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
