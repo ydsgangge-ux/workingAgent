@@ -66,7 +66,41 @@ def resolve_cli(cfg: Optional[Dict] = None) -> str:
     p = Path(raw).expanduser()
     if p.exists():
         return str(p)
-    return shutil.which(raw) or shutil.which(DEFAULT_CLI) or ""
+    found = shutil.which(raw) or shutil.which(DEFAULT_CLI) or shutil.which("qoderclicn")
+    if found:
+        return found
+    # 自动发现国内版 / 国际版安装位置（两类安装脚本目录不一致）
+    home = Path.home()
+    for cand in (
+        home / ".qoder-cn" / "bin" / "qoderclicn" / "qoderclicn.exe",
+        home / ".qoder-cn" / "bin" / "qoderclicn" / "qoderclicn",
+        home / ".qoder" / "bin" / "qoder.exe",
+        home / ".qoder" / "bin" / "qoder",
+    ):
+        if cand.exists():
+            return str(cand)
+    return ""
+
+
+_HELP_CACHE: Dict[str, str] = {}
+
+
+def _cli_help(cli: str) -> str:
+    """缓存 CLI --help 输出，用于判断某个参数是否受支持"""
+    if cli in _HELP_CACHE:
+        return _HELP_CACHE[cli]
+    text = ""
+    try:
+        r = subprocess.run(
+            [cli, "--help"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30, shell=False,
+        )
+        text = (r.stdout or "") + (r.stderr or "")
+    except Exception:
+        text = ""
+    _HELP_CACHE[cli] = text
+    return text
 
 
 def _resolve_repo(repo: str, cfg: Dict) -> str:
@@ -170,9 +204,11 @@ def run_task(task: str, repo: str = "", timeout: int = 0,
         cli, "-p", task,
         "-o", "stream-json",
         "--permission-mode", mode,
-        "--max-turns", str(turns),
         "--cwd", repo_path,
     ]
+    # 国内版 1.1.x 没有 --max-turns，按 help 自适应，避免未知参数直接失败
+    if turns and "--max-turns" in _cli_help(cli):
+        cmd += ["--max-turns", str(turns)]
 
     env = os.environ.copy()
     token = str(cfg.get("qoder_token") or "").strip()

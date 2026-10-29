@@ -1737,7 +1737,7 @@ class SettingsPage(QWidget):
 
         qoder_lay.addWidget(QLabel("CLI 路径:"), 1, 0)
         self._qoder_cli_path = QLineEdit(self._cfg.get("qoder_cli_path", "qoder"))
-        self._qoder_cli_path.setPlaceholderText("默认 qoder（从 PATH 查找），也可填绝对路径")
+        self._qoder_cli_path.setPlaceholderText("默认自动查找 qoder / qoderclicn，也可填绝对路径")
         qoder_lay.addWidget(self._qoder_cli_path, 1, 1)
 
         qoder_lay.addWidget(QLabel("PAT Token:"), 2, 0)

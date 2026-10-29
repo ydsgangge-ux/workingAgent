@@ -1303,7 +1303,7 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
         <div class="hint" style="margin-bottom:8px">仓库级改代码、重构、跑测试时，把任务外包给 Qoder CLI；只改工作区，不会自动 commit / push。</div>
         <div class="field">
           <label>CLI 路径</label>
-          <input id="cfg-qoder-path" class="input" type="text" placeholder="默认 qoder（从 PATH 查找）">
+          <input id="cfg-qoder-path" class="input" type="text" placeholder="留空自动查找 qoder / qoderclicn">
         </div>
         <div class="field">
           <label>PAT Token（留空复用本机 qoder login）</label>
