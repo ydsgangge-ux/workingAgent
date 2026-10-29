@@ -442,6 +442,20 @@ async def get_providers():
 
 
 # ── 对外启动接口（由 main.py 的 _on_engine_ready 调用）───────
+def _port_in_use(host: str, port: int) -> bool:
+    """启动前检测端口，避免 uvicorn 在子线程里 sys.exit 打出整段 traceback"""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(1)
+    try:
+        s.bind((host, port))
+        return False
+    except OSError:
+        return True
+    finally:
+        s.close()
+
+
 def start_server(agent, auth_manager, host="0.0.0.0", port=18765):
     """在 daemon 线程里启动 uvicorn，不阻塞 Qt 主线程"""
     global _agent, _auth_manager
@@ -449,6 +463,10 @@ def start_server(agent, auth_manager, host="0.0.0.0", port=18765):
     _auth_manager = auth_manager
 
     def _run():
+        if _port_in_use(host, port):
+            print(f"⚠️ 管理后台未启动：端口 {port} 已被占用")
+            print("   通常是有另一个 workingAgent 实例还在运行，关闭旧实例后再重启即可。\n")
+            return
         try:
             import socket
             ip = socket.gethostbyname(socket.gethostname())
@@ -457,7 +475,12 @@ def start_server(agent, auth_manager, host="0.0.0.0", port=18765):
         print(f"\n📱 手机访问 → http://{ip}:{port}")
         print(f"💻 本机访问 → http://localhost:{port}")
         print(f"🔑 登录方式：桌面端密码短语\n")
-        uvicorn.run(app, host=host, port=port, log_level="warning")
+        try:
+            uvicorn.run(app, host=host, port=port, log_level="warning")
+        except SystemExit:
+            print(f"⚠️ 管理后台启动失败：端口 {port} 不可用\n")
+        except OSError as e:
+            print(f"⚠️ 管理后台启动失败：{e}\n")
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
