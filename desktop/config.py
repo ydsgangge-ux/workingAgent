@@ -88,6 +88,13 @@ DEFAULT_CONFIG = {
     "assoc_temp":         0.15,   # 联想温度：越小越精/越少，越大越多但杂
     "assoc_k":            3,      # 每次最多联想条数（封顶，防命中率爆炸）
     "edge_sim_threshold": 0.8,    # 标签相似度建边阈值：≥此值两个标签视为同一实体并连边
+    # ── 外部编码智能体（Qoder CLI）──
+    "qoder_cli_path":       "qoder",        # 可执行文件路径，默认从 PATH 找
+    "qoder_token":          "",             # PAT，留空复用本机 qoder login
+    "qoder_default_repo":   "",             # 默认仓库目录，留空用项目根目录
+    "qoder_permission_mode": "accept_edits",  # default/accept_edits/auto/bypass_permissions
+    "qoder_max_turns":      20,             # 单次最大轮数
+    "qoder_timeout":        900,            # 超时秒数
 }
 
 

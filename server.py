@@ -1299,6 +1299,40 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
       </div>
 
       <div class="card">
+        <div class="section-title">🤖 外部编码智能体（Qoder CLI）</div>
+        <div class="hint" style="margin-bottom:8px">仓库级改代码、重构、跑测试时，把任务外包给 Qoder CLI；只改工作区，不会自动 commit / push。</div>
+        <div class="field">
+          <label>CLI 路径</label>
+          <input id="cfg-qoder-path" class="input" type="text" placeholder="默认 qoder（从 PATH 查找）">
+        </div>
+        <div class="field">
+          <label>PAT Token（留空复用本机 qoder login）</label>
+          <input id="cfg-qoder-token" class="input" type="password" placeholder="QODER_PERSONAL_ACCESS_TOKEN">
+        </div>
+        <div class="field">
+          <label>默认仓库目录</label>
+          <input id="cfg-qoder-repo" class="input" type="text" placeholder="留空使用项目根目录">
+        </div>
+        <div class="field">
+          <label>权限模式</label>
+          <select id="cfg-qoder-mode" class="input">
+            <option value="accept_edits">accept_edits（自动批准文件编辑）</option>
+            <option value="default">default（全部需确认，headless 会拒绝）</option>
+            <option value="auto">auto（自动批准安全操作）</option>
+            <option value="bypass_permissions">bypass_permissions（全部放行，危险）</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>超时（秒）</label>
+          <input id="cfg-qoder-timeout" class="input" type="number" min="60" max="3600">
+        </div>
+        <div class="field">
+          <label>最大轮数</label>
+          <input id="cfg-qoder-maxturns" class="input" type="number" min="1" max="100">
+        </div>
+      </div>
+
+      <div class="card">
         <div class="section-title">🔊 语音合成（TTS）</div>
         <div class="toggle">
           <span class="toggle-label">回复后自动朗读</span>
@@ -2114,6 +2148,13 @@ async function loadSettings(){
     vdsel.value=cfg.video_model||'cogvideox-flash';
     document.getElementById('cfg-video-apikey').value=cfg.video_api_key||'';
     document.getElementById('cfg-video-url').value=cfg.video_base_url||'';
+    // Qoder CLI
+    document.getElementById('cfg-qoder-path').value=cfg.qoder_cli_path||'qoder';
+    document.getElementById('cfg-qoder-token').value=cfg.qoder_token||'';
+    document.getElementById('cfg-qoder-repo').value=cfg.qoder_default_repo||'';
+    document.getElementById('cfg-qoder-mode').value=cfg.qoder_permission_mode||'accept_edits';
+    document.getElementById('cfg-qoder-timeout').value=cfg.qoder_timeout||900;
+    document.getElementById('cfg-qoder-maxturns').value=cfg.qoder_max_turns||20;
     // TTS
     document.getElementById('cfg-tts-enable').checked=cfg.tts_enabled||false;
     var vsel2=document.getElementById('cfg-tts-voice');
@@ -2168,6 +2209,12 @@ async function saveSettings(){
   cfg.video_model=document.getElementById('cfg-video-model').value;
   cfg.video_api_key=document.getElementById('cfg-video-apikey').value.trim();
   cfg.video_base_url=document.getElementById('cfg-video-url').value.trim();
+  cfg.qoder_cli_path=document.getElementById('cfg-qoder-path').value.trim()||'qoder';
+  cfg.qoder_token=document.getElementById('cfg-qoder-token').value.trim();
+  cfg.qoder_default_repo=document.getElementById('cfg-qoder-repo').value.trim();
+  cfg.qoder_permission_mode=document.getElementById('cfg-qoder-mode').value;
+  cfg.qoder_timeout=parseInt(document.getElementById('cfg-qoder-timeout').value)||900;
+  cfg.qoder_max_turns=parseInt(document.getElementById('cfg-qoder-maxturns').value)||20;
   cfg.tts_enabled=document.getElementById('cfg-tts-enable').checked;
   cfg.tts_voice=document.getElementById('cfg-tts-voice').value;
   cfg.tts_rate=parseInt(document.getElementById('cfg-tts-rate').value);

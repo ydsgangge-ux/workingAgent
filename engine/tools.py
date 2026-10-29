@@ -497,6 +497,53 @@ def run_command(command: str, cwd: str = None, timeout: int = 30) -> Dict:
 
 
 @register_tool(
+    name="delegate_coding_task",
+    description=(
+        "把仓库级编码任务外包给 Qoder CLI 执行。适合：跨文件修改、重构、迁移、"
+        "补测试、修构建错误等需要多轮迭代的任务。"
+        "它只改工作区，不会 commit 或 push；执行后返回真实改动文件和 diff 统计，"
+        "用于人工/B 层验收。简单单文件读写不要用它。"
+    ),
+    parameters={
+        "task": {"type": "string",
+                 "description": "完整任务描述：目标 + 验收标准 + 约束（不要只写一句话）",
+                 "required": True},
+        "repo": {"type": "string",
+                 "description": "仓库绝对路径，留空用配置的 qoder_default_repo（默认项目根目录）"},
+        "timeout": {"type": "integer",
+                    "description": "超时秒数，默认取配置（900）"},
+        "permission_mode": {"type": "string",
+                            "description": "权限模式：default/accept_edits/auto/bypass_permissions，默认 accept_edits"},
+        "max_turns": {"type": "integer",
+                      "description": "最大对话轮数，默认取配置（20）"}
+    },
+    risk="high"
+)
+def delegate_coding_task(task: str, repo: str = "", timeout: int = 0,
+                         permission_mode: str = "", max_turns: int = 0) -> Dict:
+    try:
+        from engine.qoder_cli import run_task
+        return run_task(task, repo=repo, timeout=timeout,
+                        permission_mode=permission_mode, max_turns=max_turns)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@register_tool(
+    name="check_qoder",
+    description="检查本机 Qoder CLI 是否安装、版本、默认仓库与认证配置，用于排查无法调用的问题。",
+    parameters={},
+    risk="low"
+)
+def check_qoder() -> Dict:
+    try:
+        from engine.qoder_cli import check_qoder as _check
+        return _check()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@register_tool(
     name="run_python",
     description="执行 Python 代码片段，返回输出结果",
     parameters={

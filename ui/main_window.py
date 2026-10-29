@@ -1724,6 +1724,66 @@ class SettingsPage(QWidget):
         self._video_base_url.setPlaceholderText("留空使用默认地址")
         media_lay.addWidget(self._video_base_url, 6, 1)
 
+        # ── 外部编码智能体（Qoder CLI）──
+        qoder_box = QGroupBox("🤖 外部编码智能体（Qoder CLI）")
+        qoder_lay = QGridLayout(qoder_box)
+        qoder_desc = QLabel(
+            "把跨文件改代码、重构、跑测试这类仓库级任务外包给 Qoder CLI。\n"
+            "它只改工作区，不会自动 commit / push。需先安装 Qoder CLI 并登录。"
+        )
+        qoder_desc.setStyleSheet("color:#8b949e;font-size:11px;")
+        qoder_desc.setWordWrap(True)
+        qoder_lay.addWidget(qoder_desc, 0, 0, 1, 2)
+
+        qoder_lay.addWidget(QLabel("CLI 路径:"), 1, 0)
+        self._qoder_cli_path = QLineEdit(self._cfg.get("qoder_cli_path", "qoder"))
+        self._qoder_cli_path.setPlaceholderText("默认 qoder（从 PATH 查找），也可填绝对路径")
+        qoder_lay.addWidget(self._qoder_cli_path, 1, 1)
+
+        qoder_lay.addWidget(QLabel("PAT Token:"), 2, 0)
+        self._qoder_token = QLineEdit(self._cfg.get("qoder_token", ""))
+        self._qoder_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self._qoder_token.setPlaceholderText("留空复用本机 qoder login 的登录态")
+        qoder_lay.addWidget(self._qoder_token, 2, 1)
+
+        qoder_lay.addWidget(QLabel("默认仓库:"), 3, 0)
+        self._qoder_default_repo = QLineEdit(self._cfg.get("qoder_default_repo", ""))
+        self._qoder_default_repo.setPlaceholderText("留空使用当前项目根目录")
+        qoder_lay.addWidget(self._qoder_default_repo, 3, 1)
+
+        qoder_lay.addWidget(QLabel("权限模式:"), 4, 0)
+        self._qoder_permission_mode = QComboBox()
+        self._qoder_permission_mode.setStyleSheet(COMBO_STYLE)
+        for _k, _n in (
+            ("accept_edits", "accept_edits（自动批准文件编辑，命令需授权）"),
+            ("default", "default（所有操作都需确认，headless 会被拒绝）"),
+            ("auto", "auto（自动批准安全操作）"),
+            ("bypass_permissions", "bypass_permissions（全部放行，危险）"),
+        ):
+            self._qoder_permission_mode.addItem(_n, _k)
+        _qmode = self._cfg.get("qoder_permission_mode") or "accept_edits"
+        _qidx = self._qoder_permission_mode.findData(_qmode)
+        if _qidx >= 0:
+            self._qoder_permission_mode.setCurrentIndex(_qidx)
+        qoder_lay.addWidget(self._qoder_permission_mode, 4, 1)
+
+        qoder_lay.addWidget(QLabel("超时 / 轮数:"), 5, 0)
+        _qoder_row = QWidget()
+        _qoder_row_lay = QHBoxLayout(_qoder_row)
+        _qoder_row_lay.setContentsMargins(0, 0, 0, 0)
+        self._qoder_timeout = QLineEdit(str(self._cfg.get("qoder_timeout", 900)))
+        self._qoder_timeout.setPlaceholderText("超时秒数")
+        self._qoder_max_turns = QLineEdit(str(self._cfg.get("qoder_max_turns", 20)))
+        self._qoder_max_turns.setPlaceholderText("最大轮数")
+        _qoder_row_lay.addWidget(self._qoder_timeout)
+        _qoder_row_lay.addWidget(self._qoder_max_turns)
+        qoder_lay.addWidget(_qoder_row, 5, 1)
+
+        _qoder_check_btn = QPushButton("🔍 检测 Qoder CLI")
+        _qoder_check_btn.setFixedHeight(28)
+        _qoder_check_btn.clicked.connect(self._check_qoder_cli)
+        qoder_lay.addWidget(_qoder_check_btn, 6, 1)
+
         # Ollama 额外设置（只有选 Ollama 时显示）
         self._ollama_widget = QWidget()
         ol_lay = QGridLayout(self._ollama_widget)
@@ -2242,6 +2302,7 @@ class SettingsPage(QWidget):
         layout.addWidget(api_box)
         layout.addWidget(vision_box)
         layout.addWidget(media_box)
+        layout.addWidget(qoder_box)
         layout.addWidget(hotkey_box)
         layout.addWidget(win_box)
         layout.addWidget(tts_box)
@@ -2289,6 +2350,31 @@ class SettingsPage(QWidget):
         self._ollama_widget.setVisible(is_ollama)
         self._api_key.setEnabled(not is_ollama)
         self._api_key.setPlaceholderText("" if is_ollama else "Enter your API key")
+
+    def _check_qoder_cli(self):
+        """检测本机 Qoder CLI 是否可用（用当前界面里填的路径，不必先保存）"""
+        try:
+            from engine.qoder_cli import check_qoder
+            cfg = dict(self._cfg)
+            cfg["qoder_cli_path"] = (self._qoder_cli_path.text().strip()
+                                     or "qoder")
+            cfg["qoder_token"] = self._qoder_token.text().strip()
+            cfg["qoder_default_repo"] = self._qoder_default_repo.text().strip()
+            r = check_qoder(cfg)
+            if r.get("installed"):
+                msg = (
+                    f"已安装：{r.get('path','')}\n"
+                    f"版本：{r.get('version','')}\n"
+                    f"默认仓库：{r.get('repo','')}"
+                    f"{'' if r.get('repo_exists') else '（不存在）'}\n"
+                    f"认证：{'已填写 PAT' if r.get('has_token') else '复用本机 qoder login'}"
+                )
+                QMessageBox.information(self, "Qoder CLI 可用", msg)
+            else:
+                QMessageBox.warning(self, "未找到 Qoder CLI",
+                                    r.get("error") or "请先安装 Qoder CLI")
+        except Exception as e:
+            QMessageBox.warning(self, "检测失败", str(e))
 
     def _on_vision_provider_changed(self, idx: int):
         from engine.vision_client import VISION_PROVIDER_INFO
@@ -2435,6 +2521,20 @@ class SettingsPage(QWidget):
         self._cfg["video_model"]       = self._video_model.currentData() or self._video_model.currentText().strip()
         self._cfg["video_api_key"]     = self._video_api_key.text().strip()
         self._cfg["video_base_url"]    = self._video_base_url.text().strip()
+        # 外部编码智能体（Qoder CLI）
+        self._cfg["qoder_cli_path"]        = self._qoder_cli_path.text().strip() or "qoder"
+        self._cfg["qoder_token"]           = self._qoder_token.text().strip()
+        self._cfg["qoder_default_repo"]    = self._qoder_default_repo.text().strip()
+        self._cfg["qoder_permission_mode"] = (self._qoder_permission_mode.currentData()
+                                              or "accept_edits")
+        try:
+            self._cfg["qoder_timeout"] = int(self._qoder_timeout.text().strip() or 900)
+        except ValueError:
+            self._cfg["qoder_timeout"] = 900
+        try:
+            self._cfg["qoder_max_turns"] = int(self._qoder_max_turns.text().strip() or 20)
+        except ValueError:
+            self._cfg["qoder_max_turns"] = 20
         # 企业微信机器人
         self._cfg["wecom_bot_id"]      = self._wecom_bot_id.text().strip()
         self._cfg["wecom_bot_secret"]  = self._wecom_bot_secret.text().strip()
