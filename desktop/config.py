@@ -80,6 +80,9 @@ DEFAULT_CONFIG = {
     "qq_access_token":    "",                            # OneBot 鉴权 Token（可空）
     "qq_allowed_uids":    "",                            # QQ 号白名单（逗号分隔，空=不响应任何人）
     "qq_group_whitelist": "",                            # 群号白名单（逗号分隔，空=不接受群聊）
+    "qq_show_thinking":   True,                          # 收到消息先发"正在思考…"
+    "qq_reply_length":    "normal",                      # 回复长度：short / normal / long
+    "qq_split_long":      True,                          # 长回复拆成多条发送
     # ── 内嵌可见浏览器（CDP 同源驱动）──
     "use_embedded_browser":  False,   # 开启后主程序内嵌浏览器 Tab，AI 通过 CDP 操作同一页面（保留登录态）
     "embedded_browser_port": 9222,    # QtWebEngine CDP 调试端口

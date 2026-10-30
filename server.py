@@ -1360,6 +1360,27 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
       </div>
 
       <div class="card">
+        <div class="section-title">💬 QQ 聊天</div>
+        <div class="hint" style="margin-bottom:8px">仅影响 QQ 线路，飞书/企微/网页/桌面端不受影响。保存后下一条消息即生效，无需重启。</div>
+        <div class="toggle">
+          <span class="toggle-label">收到消息先发「正在思考…」</span>
+          <label class="switch"><input type="checkbox" id="cfg-qq-thinking"><span class="slider"></span></label>
+        </div>
+        <div class="field">
+          <label>回复长度</label>
+          <select id="cfg-qq-len" class="input">
+            <option value="short">简短（50 字内，一两句）</option>
+            <option value="normal">正常（100 字内，最多 3 段）</option>
+            <option value="long">详细（可充分展开）</option>
+          </select>
+        </div>
+        <div class="toggle">
+          <span class="toggle-label">按段落分条发送（像真人一句句发）</span>
+          <label class="switch"><input type="checkbox" id="cfg-qq-split"><span class="slider"></span></label>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="section-title">🔊 语音合成（TTS）</div>
         <div class="toggle">
           <span class="toggle-label">回复后自动朗读</span>
@@ -2183,6 +2204,10 @@ async function loadSettings(){
     document.getElementById('cfg-qoder-model').value=cfg.qoder_model||'';
     document.getElementById('cfg-qoder-timeout').value=cfg.qoder_timeout||900;
     document.getElementById('cfg-qoder-maxturns').value=cfg.qoder_max_turns||20;
+    // QQ 聊天
+    document.getElementById('cfg-qq-thinking').checked=cfg.qq_show_thinking!==false;
+    document.getElementById('cfg-qq-len').value=cfg.qq_reply_length||'normal';
+    document.getElementById('cfg-qq-split').checked=cfg.qq_split_long!==false;
     // TTS
     document.getElementById('cfg-tts-enable').checked=cfg.tts_enabled||false;
     var vsel2=document.getElementById('cfg-tts-voice');
@@ -2244,6 +2269,9 @@ async function saveSettings(){
   cfg.qoder_model=document.getElementById('cfg-qoder-model').value.trim();
   cfg.qoder_timeout=parseInt(document.getElementById('cfg-qoder-timeout').value)||900;
   cfg.qoder_max_turns=parseInt(document.getElementById('cfg-qoder-maxturns').value)||20;
+  cfg.qq_show_thinking=document.getElementById('cfg-qq-thinking').checked;
+  cfg.qq_reply_length=document.getElementById('cfg-qq-len').value;
+  cfg.qq_split_long=document.getElementById('cfg-qq-split').checked;
   cfg.tts_enabled=document.getElementById('cfg-tts-enable').checked;
   cfg.tts_voice=document.getElementById('cfg-tts-voice').value;
   cfg.tts_rate=parseInt(document.getElementById('cfg-tts-rate').value);

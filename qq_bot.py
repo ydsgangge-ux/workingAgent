@@ -37,6 +37,24 @@ except ImportError:  # pragma: no cover
 
 
 # ── 配置读取 ────────────────────────────────────────────────
+def _as_bool(v, default: bool = True) -> bool:
+    """兼容布尔值和 "true"/"false" 字符串"""
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    if v is None:
+        return default
+    return bool(v)
+
+
+# 从 desktop / ha 配置里允许覆盖的键（新增 QQ 设置时记得加进来）
+QQ_DISPLAY_KEYS = ("qq_show_thinking", "qq_reply_length", "qq_split_long")
+
+QQ_CFG_KEYS = (
+    "qq_enable", "qq_ws_url", "qq_access_token",
+    "qq_allowed_uids", "qq_group_whitelist",
+) + QQ_DISPLAY_KEYS
+
+
 def _desktop_config() -> dict:
     """读取 desktop / ha 配置（与 lark_bot.py 优先级一致）"""
     # 1) 环境变量优先
@@ -51,20 +69,20 @@ def _desktop_config() -> dict:
         return cfg
 
     # 2) ha_config.json（服务器部署）
+    used_ha = False
     try:
         cfg_path = Path(__file__).parent / "ha_config.json"
         if cfg_path.exists():
             data = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
             if data.get("qq_ws_url"):
-                for k in ("qq_enable", "qq_ws_url", "qq_access_token",
-                          "qq_allowed_uids", "qq_group_whitelist"):
+                for k in QQ_CFG_KEYS:
                     if k in data:
                         cfg[k] = data[k]
-                return cfg
+                used_ha = True
     except Exception:
         pass
 
-    # 3) desktop config.json（GUI 设置）
+    # 3) desktop config.json（GUI / 18765 后台）
     try:
         if os.name == "nt":
             root = Path(os.environ.get("APPDATA", str(Path.home()))) / "workingAgent"
@@ -73,8 +91,9 @@ def _desktop_config() -> dict:
         f = root / "config.json"
         if f.exists():
             data = json.loads(f.read_text(encoding="utf-8-sig"))
-            for k in ("qq_enable", "qq_ws_url", "qq_access_token",
-                      "qq_allowed_uids", "qq_group_whitelist"):
+            # ha_config 已确定连接参数时，只让桌面配置补显示类设置，避免连接被覆盖
+            keys = QQ_DISPLAY_KEYS if used_ha else QQ_CFG_KEYS
+            for k in keys:
                 if k in data:
                     cfg[k] = data[k]
     except Exception:
@@ -249,6 +268,7 @@ class QQBot:
     """把 QQ（OneBot 11）消息桥接到 agent.process()"""
 
     TEXT_LIMIT = 900          # 单条文本上限（QQ 长消息容易发送失败）
+    SPLIT_CHARS = 300         # 分段模式下单段最大字数，超过再按句子切
     CONFIRM_TIMEOUT = 90      # 高风险操作确认等待上限（秒），超时自动拒绝
     ATTACHMENT_WAIT = 20.0    # 附件先到、指令未到时的等待窗口（秒）
 
@@ -269,6 +289,9 @@ class QQBot:
         # 群聊旁听记录：{group_id: [{ts, name, text}]}，只作 @ 时的背景，不进记忆
         self._group_recent = {}
         self._group_lock = threading.Lock()
+        # 仅 QQ 线路生效的显示设置
+        self._show_thinking = _as_bool(self._cfg.get("qq_show_thinking"), True)
+        self._split_long = _as_bool(self._cfg.get("qq_split_long"), True)
 
     def set_agent(self, agent):
         """引擎重载时更新 agent 引用，无需重连 QQ"""
@@ -339,8 +362,18 @@ class QQBot:
         uid = f"qq_group{group_id}_{user_id}" if kind == "group" else f"qq_{user_id}"
         self._handle_message(kind, target, user_id, uname, uid, segs, group_ctx)
 
+    def _refresh_display_cfg(self):
+        """每次处理消息前重读设置，改完保存即可生效，不用重启"""
+        try:
+            cfg = _desktop_config() or {}
+            self._show_thinking = _as_bool(cfg.get("qq_show_thinking"), True)
+            self._split_long = _as_bool(cfg.get("qq_split_long"), True)
+        except Exception:
+            pass
+
     def _handle_message(self, kind: str, target: str, user_id: str,
                         uname: str, uid: str, segs: list, group_ctx: str = ""):
+        self._refresh_display_cfg()
         attachment, text = self._collect(segs)
 
         # ① 高风险操作确认：y / n 优先消费，避免被当成新任务
@@ -371,7 +404,8 @@ class QQBot:
     def _run_and_reply(self, kind: str, target: str, user_id: str,
                        uname: str, user_input: str, group_ctx: str = ""):
         at_user = user_id if kind == "group" else ""
-        self._reply(kind, target, "正在思考…", at_user=at_user)
+        if self._show_thinking:
+            self._reply(kind, target, "正在思考…", at_user=at_user)
 
         uid = (f"qq_group{target}_{user_id}" if kind == "group"
                else f"qq_{user_id}")
@@ -622,38 +656,74 @@ class QQBot:
 
     # ── 回复与交付 ─────────────────────────────────────
     def _reply(self, kind: str, target: str, text: str, at_user: str = ""):
-        """发送文本（自动分段），并把 [face:N] / emoji 转成 QQ 表情段"""
+        """发送文本：按自然段落分条发出（像人打完一段就发），并转 QQ 表情"""
         text = text or ""
-        tokens = self._tokenize(text)
-        text_len = sum(len(v) for k, v in tokens if k == "text")
-
-        # 常规长度：一次发出，文字与表情按原顺序排列
-        if tokens and text_len <= self.TEXT_LIMIT:
-            segs = []
-            if at_user:
-                segs.append({"type": "at", "data": {"qq": str(at_user)}})
-                segs.append({"type": "text", "data": {"text": " "}})
-            faces = 0
-            for k, v in tokens:
-                if k == "face":
-                    if faces >= FACE_MAX:
-                        continue
-                    faces += 1
-                    segs.append({"type": "face", "data": {"id": v}})
-                else:
-                    segs.append({"type": "text", "data": {"text": v}})
-            self._send_group_or_private(kind, target, segs)
+        if not text.strip():
             return
 
-        # 超长回复：退化为纯文本分段（表情标记去掉，避免切段后错位）
-        plain = FACE_TOKEN_RE.sub("", text)
-        for chunk in self._split_text(plain):
-            segs = []
-            if at_user:
-                segs.append({"type": "at", "data": {"qq": str(at_user)}})
-                segs.append({"type": "text", "data": {"text": " "}})
-            segs.append({"type": "text", "data": {"text": chunk}})
-            self._send_group_or_private(kind, target, segs)
+        if self._split_long:
+            # 按段落分条：每段一条消息，超长段落再按句子切
+            chunks = self._split_paragraphs(text, self.SPLIT_CHARS)
+        else:
+            # 不分段：整段一次发出，仅在超过 QQ 单条上限时才硬切
+            chunks = [text] if len(text) <= self.TEXT_LIMIT \
+                else self._split_text(FACE_TOKEN_RE.sub("", text), self.TEXT_LIMIT)
+
+        for i, chunk in enumerate(chunks):
+            self._send_rich(kind, target, chunk,
+                            at_user if i == 0 else "")   # 只在第一段 @，避免刷屏
+
+    def _send_rich(self, kind: str, target: str, text: str, at_user: str = ""):
+        """把一段文本连同其中的 [face:N]/emoji 一起发出"""
+        tokens = self._tokenize(text)
+        if not tokens:
+            return
+        segs = []
+        if at_user:
+            segs.append({"type": "at", "data": {"qq": str(at_user)}})
+            segs.append({"type": "text", "data": {"text": " "}})
+        faces = 0
+        for k, v in tokens:
+            if k == "face":
+                if faces >= FACE_MAX:
+                    continue
+                faces += 1
+                segs.append({"type": "face", "data": {"id": v}})
+            else:
+                segs.append({"type": "text", "data": {"text": v}})
+        self._send_group_or_private(kind, target, segs)
+
+    @staticmethod
+    def _split_paragraphs(text: str, limit: int) -> list:
+        """按自然段落切成多条消息；单段超过 limit 时再按句子切"""
+        text = (text or "").strip()
+        if not text:
+            return []
+        # 每个换行都算一次分条：写完一段就发出去
+        blocks = [b.strip() for b in re.split(r"\n+", text) if b.strip()]
+        if not blocks:
+            return []
+
+        chunks = []
+        for block in blocks:
+            if len(block) <= limit:
+                chunks.append(block)
+                continue
+            buf = ""
+            for part in re.split(r"(?<=[。！？!?；;])", block):
+                if not part.strip():
+                    continue
+                if len(buf) + len(part) > limit and buf:
+                    chunks.append(buf.strip())
+                    buf = ""
+                buf += part
+            if buf.strip():
+                # 整段没有句号又超长时，退化为按长度硬切
+                if len(buf) > limit:
+                    chunks.extend(QQBot._split_text(buf.strip(), limit))
+                else:
+                    chunks.append(buf.strip())
+        return chunks
 
     @staticmethod
     def _tokenize(text: str) -> list:
@@ -771,8 +841,7 @@ def start_qq_bot(agent, cfg: Optional[dict] = None) -> Optional[QQBot]:
     try:
         merged = _desktop_config()
         if cfg:
-            for k in ("qq_enable", "qq_ws_url", "qq_access_token",
-                      "qq_allowed_uids", "qq_group_whitelist"):
+            for k in QQ_CFG_KEYS:
                 if k in cfg:
                     merged[k] = cfg[k]
         if not merged.get("qq_enable"):

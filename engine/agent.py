@@ -174,6 +174,15 @@ QQ_FACE_HINT = """【当前聊天渠道】QQ
 常用表情ID：微笑14 呲牙13 调皮12 得意4 流泪5 害羞6 酷16 可爱21 偷笑20 疑问32 委屈49 亲亲52 强79 抱拳83 爱心66。
 规则：只在情绪合适时用，每句最多 2-3 个，不要每句都加；不要解释这些标记，直接输出。"""
 
+# QQ 回复长度提示：由设置里的 qq_reply_length 决定
+QQ_LENGTH_HINTS = {
+    "short": "【回复长度】简短：控制在 50 字以内，一两句话说完，不解释、不列点。",
+    "normal": ("【回复长度】正常：日常聊天控制在 100 字以内、最多 3 段；"
+               "只有用户明确要求详细说明、分步骤、列清单或写长文时才展开到 400 字左右。"
+               "不要复述用户的问题，不要总结自己刚说过的话。"),
+    "long": "【回复长度】详细：可以充分展开，但避免空话和重复。",
+}
+
 
 class ConsciousnessAgent:
     """A 层意识主体 v3"""
@@ -601,9 +610,16 @@ class ConsciousnessAgent:
             guest_notice = self.auth.guest_system_prompt()
             profile_context = (guest_notice + "\n\n" + profile_context).strip()
 
-        # 渠道能力提示（QQ 小黄脸等），只在该渠道注入
+        # 渠道能力提示（QQ 小黄脸 / 回复长度），只在该渠道注入
         if channel == "qq":
-            profile_context = (QQ_FACE_HINT + "\n\n" + profile_context).strip()
+            # 实时读磁盘配置，改完设置立刻生效（_get_config 有缓存，会读到旧值）
+            try:
+                from desktop.config import load_config
+                _style = str((load_config() or {}).get("qq_reply_length") or "normal")
+            except Exception:
+                _style = str(self._get_config("qq_reply_length", "normal") or "normal")
+            _len_hint = QQ_LENGTH_HINTS.get(_style, QQ_LENGTH_HINTS["normal"])
+            profile_context = (QQ_FACE_HINT + "\n" + _len_hint + "\n\n" + profile_context).strip()
 
         # 统计检索到的记忆数量
         total = 0

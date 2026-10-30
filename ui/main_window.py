@@ -2311,17 +2311,34 @@ class SettingsPage(QWidget):
         self._qq_group_whitelist.setPlaceholderText("允许的群号，逗号分隔；留空则忽略所有群消息")
         qq_lay.addWidget(self._qq_group_whitelist, 4, 1)
 
-        qq_hint = QLabel("需本机登录 QQ NT 并安装 NapCatQQ，开启 WebSocket 服务器。群聊只在 @ 机器人时响应。重启后生效。")
+        self._qq_show_thinking = QCheckBox("收到消息时先发「正在思考…」")
+        self._qq_show_thinking.setChecked(bool(self._cfg.get("qq_show_thinking", True)))
+        qq_lay.addWidget(self._qq_show_thinking, 5, 0, 1, 2)
+
+        qq_lay.addWidget(QLabel("回复长度:"), 6, 0)
+        self._qq_reply_length = QComboBox()
+        for _val, _label in (("short", "简短"), ("normal", "正常"), ("long", "详细")):
+            self._qq_reply_length.addItem(_label, _val)
+        _cur_len = str(self._cfg.get("qq_reply_length", "normal") or "normal")
+        _idx_len = self._qq_reply_length.findData(_cur_len)
+        self._qq_reply_length.setCurrentIndex(_idx_len if _idx_len >= 0 else 1)
+        qq_lay.addWidget(self._qq_reply_length, 6, 1)
+
+        self._qq_split_long = QCheckBox("按段落分条发送（像真人一句句发）")
+        self._qq_split_long.setChecked(bool(self._cfg.get("qq_split_long", True)))
+        qq_lay.addWidget(self._qq_split_long, 7, 0, 1, 2)
+
+        qq_hint = QLabel("需本机登录 QQ NT 并安装 NapCatQQ，开启 WebSocket 服务器。群聊只在 @ 机器人时响应。以上设置仅影响 QQ 线路，重启后生效。")
         qq_hint.setStyleSheet("color:#8b949e;font-size:11px;")
         qq_hint.setWordWrap(True)
-        qq_lay.addWidget(qq_hint, 5, 1)
+        qq_lay.addWidget(qq_hint, 8, 1)
 
         qq_status = ("✅ websocket-client 已安装" if websocket_ok
                      else "⚠️ 未安装，运行: pip install websocket-client>=1.6.0")
         qq_status_lbl = QLabel(qq_status)
         qq_status_lbl.setStyleSheet(
             f"color:{'#3fb950' if websocket_ok else '#d29922'};font-size:11px;")
-        qq_lay.addWidget(qq_status_lbl, 6, 1)
+        qq_lay.addWidget(qq_status_lbl, 9, 1)
 
         layout.addWidget(api_box)
         layout.addWidget(vision_box)
@@ -2638,6 +2655,9 @@ class SettingsPage(QWidget):
         self._cfg["qq_access_token"]    = self._qq_access_token.text().strip()
         self._cfg["qq_allowed_uids"]    = self._qq_allowed_uids.text().strip()
         self._cfg["qq_group_whitelist"] = self._qq_group_whitelist.text().strip()
+        self._cfg["qq_show_thinking"]   = self._qq_show_thinking.isChecked()
+        self._cfg["qq_reply_length"]    = self._qq_reply_length.currentData()
+        self._cfg["qq_split_long"]      = self._qq_split_long.isChecked()
 
         # 立即应用语言
         try:
