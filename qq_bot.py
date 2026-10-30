@@ -266,6 +266,9 @@ class QQBot:
         self._pending_attachments = PendingAttachments(self.ATTACHMENT_WAIT)
         self._pending_confirm = {}          # key -> {event, result}
         self._confirm_lock = threading.Lock()
+        # 群聊旁听记录：{group_id: [{ts, name, text}]}，只作 @ 时的背景，不进记忆
+        self._group_recent = {}
+        self._group_lock = threading.Lock()
 
     def set_agent(self, agent):
         """引擎重载时更新 agent 引用，无需重连 QQ"""
@@ -312,24 +315,32 @@ class QQBot:
             return
 
         segs = self._segments(ev.get("message"))
-        if kind == "group":
-            if group_id not in self._groups:
-                print(f"[QQBot] 忽略非白名单群 {group_id}")
-                return
-            if not self._is_at_me(segs, ev.get("self_id")):
-                return    # 群里只在 @ 时响应
-        elif kind != "private":
-            return
-
         target = group_id if kind == "group" else user_id
         sender = ev.get("sender") or {}
         uname = (sender.get("card") or sender.get("nickname") or user_id).strip()
 
+        group_ctx = ""
+        if kind == "group":
+            if group_id not in self._groups:
+                print(f"[QQBot] 忽略非白名单群 {group_id}")
+                return
+            at_me = self._is_at_me(segs, ev.get("self_id"))
+            # 群里所有消息都旁听记录（不 @ 也记），@ 时作为背景上下文注入
+            entry = None
+            text_preview = self._segs_text(segs)
+            if text_preview:
+                entry = self._remember_group(group_id, uname, text_preview)
+            if not at_me:
+                return    # 群里只在 @ 时响应
+            group_ctx = self._group_context_text(group_id, exclude=entry)
+        elif kind != "private":
+            return
+
         uid = f"qq_group{group_id}_{user_id}" if kind == "group" else f"qq_{user_id}"
-        self._handle_message(kind, target, user_id, uname, uid, segs)
+        self._handle_message(kind, target, user_id, uname, uid, segs, group_ctx)
 
     def _handle_message(self, kind: str, target: str, user_id: str,
-                        uname: str, uid: str, segs: list):
+                        uname: str, uid: str, segs: list, group_ctx: str = ""):
         attachment, text = self._collect(segs)
 
         # ① 高风险操作确认：y / n 优先消费，避免被当成新任务
@@ -342,7 +353,8 @@ class QQBot:
             self._pending_attachments.hold(
                 uid,
                 attachment,
-                lambda att: self._run_and_reply(kind, target, user_id, uname, att),
+                lambda att: self._run_and_reply(
+                    kind, target, user_id, uname, att, group_ctx=group_ctx),
             )
             self._reply(kind, target, "文件已收到，要我怎么处理？直接发指令即可。",
                         at_user=user_id if kind == "group" else "")
@@ -353,10 +365,11 @@ class QQBot:
         user_input = " ".join(p for p in (held, attachment, text) if p).strip()
         if not user_input:
             user_input = "请分析以上内容"
-        self._run_and_reply(kind, target, user_id, uname, user_input)
+        self._run_and_reply(kind, target, user_id, uname, user_input,
+                            group_ctx=group_ctx)
 
     def _run_and_reply(self, kind: str, target: str, user_id: str,
-                       uname: str, user_input: str):
+                       uname: str, user_input: str, group_ctx: str = ""):
         at_user = user_id if kind == "group" else ""
         self._reply(kind, target, "正在思考…", at_user=at_user)
 
@@ -373,6 +386,7 @@ class QQBot:
                     override_uid=uid,
                     override_uname=f"QQ_{uname}"[:40],
                     channel="qq",
+                    extra_context=group_ctx,
                 )
             reply = (result.get("response") or result.get("reply")
                      or result.get("text") or "好的，我知道了。")
@@ -463,6 +477,43 @@ class QQBot:
         return any(s.get("type") == "at"
                    and str((s.get("data") or {}).get("qq")) == str(self_id)
                    for s in segs)
+
+    @staticmethod
+    def _segs_text(segs: list) -> str:
+        """只取纯文本段（不含 @/图片/文件），用于群聊旁听记录"""
+        return "".join(
+            str((s.get("data") or {}).get("text", ""))
+            for s in segs if s.get("type") == "text"
+        ).strip()
+
+    GROUP_CONTEXT_MAX = 20          # 群聊背景最多保留最近 20 条
+    GROUP_CONTEXT_MAX_AGE = 1800    # 且只取最近 30 分钟内，更早的算冷场，不再加载
+
+    def _remember_group(self, group_id: str, name: str, text: str) -> dict:
+        """记录一条群消息（含未 @ 的），返回该条记录以便后续排除"""
+        entry = {"ts": time.time(), "name": name, "text": text[:150]}
+        with self._group_lock:
+            lst = self._group_recent.setdefault(group_id, [])
+            lst.append(entry)
+            del lst[:-self.GROUP_CONTEXT_MAX]
+        return entry
+
+    def _group_context_text(self, group_id: str, exclude: dict = None) -> str:
+        """把群聊旁听记录拼成背景文本，排除当前这条（它已作为输入传给 A 层）
+        并跳过超过 GROUP_CONTEXT_MAX_AGE 的旧消息，隔久了就不再加载。"""
+        cutoff = time.time() - self.GROUP_CONTEXT_MAX_AGE
+        with self._group_lock:
+            lst = [m for m in self._group_recent.get(group_id, [])
+                   if m.get("ts", 0) >= cutoff]
+        if exclude is not None:
+            lst = [m for m in lst if m is not exclude]
+        if not lst:
+            return ""
+        return "\n".join(
+            f"[{time.strftime('%H:%M', time.localtime(m['ts']))}] "
+            f"{m['name']}：{m['text']}"
+            for m in lst
+        )
 
     def _collect(self, segs: list):
         """返回 (附件标记, 纯文本)"""

@@ -367,10 +367,12 @@ class ConsciousnessAgent:
             return ""
 
     def process(self, user_input: str, override_uid: str = "",
-                override_uname: str = "", channel: str = "") -> Dict[str, Any]:
+                override_uname: str = "", channel: str = "",
+                extra_context: str = "") -> Dict[str, Any]:
         """完整交互流水线 v3
         override_uid / override_uname: 外部渠道（如企业微信）传入的用户身份覆盖
         channel: 渠道标识（qq/lark/wecom/web），用于注入该渠道可用的表达方式
+        extra_context: 只用于本次推理的附加背景（如 QQ 群聊旁听），不写入记忆与历史
         """
         interaction_id = str(uuid.uuid4())[:8]
 
@@ -633,6 +635,7 @@ class ConsciousnessAgent:
             current_user_name=current_user_name,
             thinking_mode=thinking_mode,
             complexity=perception_complexity,
+            group_context=extra_context,
         )
         did_think = self._should_think(thinking_mode, perception_complexity, task_type)
         think_tag = "⏱️思考模式" if did_think else "⚡快速模式"
@@ -1343,7 +1346,8 @@ class ConsciousnessAgent:
     def _reason(self, user_input, emotion, memory_context, task_type,
                 profile_context: str = "", current_uid: str = "default",
                 current_user_name: str = "用户",
-                thinking_mode: str = "auto", complexity: str = "complex") -> Dict:
+                thinking_mode: str = "auto", complexity: str = "complex",
+                group_context: str = "") -> Dict:
         emotion_desc = (
             f"{emotion.primary.value}（强度{emotion.intensity:.1f}，"
             f"{'正面' if emotion.valence > 0 else '负面' if emotion.valence < 0 else '中性'}）"
@@ -1351,6 +1355,14 @@ class ConsciousnessAgent:
 
         # 从记忆系统获取最近大纲（按时间排序，帮助理解"再读一下"等指代）
         recent_context = ""
+        # 群聊旁听背景：只在本次推理可见，不写入记忆
+        if group_context:
+            recent_context = (
+                "【这个群里刚才大家在聊（只作背景，不是私聊，方括号内是过去时间）】\n"
+                f"{group_context}\n"
+                "（以上他人发言你只是听到，不必逐条回应；现在被 @ 的是"
+                f"{current_user_name}）\n"
+            )
         if self.memory:
             try:
                 recent_memories = self.memory.store.get_recent(
@@ -1363,7 +1375,7 @@ class ConsciousnessAgent:
                     for m in recent_memories:
                         _ts = getattr(m, "timestamp", "") or getattr(m, "created_at", "")
                         lines.append(f"- {self._fmt_history_stamp({'ts': _ts})}{m.content[:150]}")
-                    recent_context = (
+                    recent_context += (
                         f"【最近记忆（按时间，方括号内是过去发生的时间，不是现在）】\n"
                         + "\n".join(lines) + "\n"
                     )
