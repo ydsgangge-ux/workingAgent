@@ -552,6 +552,12 @@ class ChatPage(QWidget):
         self._msg_layout.addStretch()
         self._scroll.setWidget(self._msg_container)
 
+        # 自动贴底：只要用户在底部附近，内容高度变化就跟随；手动上翻则不打扰
+        self._auto_scroll = True
+        _sb = self._scroll.verticalScrollBar()
+        _sb.rangeChanged.connect(self._on_scroll_range_changed)
+        _sb.valueChanged.connect(self._on_scroll_value_changed)
+
         # 输入区
         input_frame = QFrame()
         input_frame.setStyleSheet(
@@ -864,7 +870,7 @@ class ChatPage(QWidget):
         if not is_user:
             bl.addStretch()
         self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
-        self._scroll_to_bottom()
+        self._scroll_to_bottom(force=is_user)
 
     def fill_input(self, text: str):
         """外部调用：填入输入框（如 OCR 结果）"""
@@ -879,7 +885,7 @@ class ChatPage(QWidget):
         self._msg_layout.insertWidget(
             self._msg_layout.count() - 1, bubble
         )
-        self._scroll_to_bottom()
+        self._scroll_to_bottom(force=True)   # 自己发消息必定贴底
 
     def add_ai_message(self, text: str, meta: dict = None):
         bubble = MessageBubble(text, is_user=False, meta=meta)
@@ -912,13 +918,24 @@ class ChatPage(QWidget):
                     w.deleteLater()
                     break
 
-    def _scroll_to_bottom(self):
-        QTimer.singleShot(
-            80,
-            lambda: self._scroll.verticalScrollBar().setValue(
-                self._scroll.verticalScrollBar().maximum()
-            )
-        )
+    def _on_scroll_range_changed(self, _min: int, _max: int):
+        """内容高度变化（消息变长、图片加载）后若仍在底部，就继续贴底"""
+        if self._auto_scroll:
+            self._scroll.verticalScrollBar().setValue(_max)
+
+    def _on_scroll_value_changed(self, value: int):
+        """用户手动上翻时停止自动贴底，回到底部附近后恢复"""
+        sb = self._scroll.verticalScrollBar()
+        self._auto_scroll = value >= sb.maximum() - 24
+
+    def _scroll_to_bottom(self, force: bool = False):
+        """滚到最底；force=True 表示自己的新消息必须贴底"""
+        if force:
+            self._auto_scroll = True
+        if not self._auto_scroll:
+            return
+        sb = self._scroll.verticalScrollBar()
+        QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))
 
 
 # ── 记忆库页 ──────────────────────────────────────

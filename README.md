@@ -99,6 +99,7 @@ workingAgent 能真正地**做事**，而不只是"说"：
 | **图像** | AI 图片生成（ComfyUI SDXL/NoobAI 或 pollinations.ai） |
 | **智能家居** | Home Assistant 集成——灯、空调、窗帘、咖啡机 |
 | **桌面** | 截图、OCR、鼠标键盘控制、启动应用 |
+| **外部智能体** | Qoder CLI 外包仓库级改代码 / 写脚本（点名或兜底时调用） |
 
 ### ⏰ 定时任务 — 无人值守的自动化
 
@@ -385,6 +386,72 @@ Get-NetTCPConnection -LocalPort 3001 -State Listen
 
 ---
 
+## 🤖 接入 Qoder CLI（可选）
+
+把写代码这类"仓库级"的活外包给 **Qoder CLI**，用它的免费额度，省 B 层的 token。
+
+**定位是兜底工具**：日常的文件处理、文档生成、图片处理仍然走内置工具；只有两种情况会调它——
+
+1. 你**点名**要用："用 Qoder 把 `workspace/default` 里的页面改一下"
+2. 任务确实需要写脚本 / 改多个文件 / 跑测试
+
+你点名时它**必须执行**，不管任务大小；执行完再用其他工具检查验收。
+
+### 一、拿到 CLI
+
+安装 Qoder 官方客户端后，会自带一个命令行入口。程序会自动查找：
+
+- PATH 里的 `qoder` 或 `qoderclicn`
+- Windows 默认位置：`%USERPROFILE%\.qoder-cn\bin\qoderclicn\qoderclicn.exe`
+
+先在本机登录一次：
+
+```powershell
+qoderclicn login
+qoderclicn --list-models   # 看有哪些模型（部分免费）
+```
+
+### 二、填进设置
+
+桌面 GUI → 系统设置 →「🤖 外部编码智能体（Qoder CLI）」，或 18765 后台 → 设置 → 同名卡片：
+
+| 配置项 | 说明 |
+|--------|------|
+| CLI 路径 | 留空自动查找 |
+| PAT Token | 留空直接复用本机 `qoder login` 的登录态 |
+| 默认仓库目录 | **留空自动用 `workspace/default`**（推荐，程序会自动 `git init`） |
+| 权限模式 | `auto`（推荐）；无 TTY 时 `default` 会卡在权限询问 |
+| 模型 | 留空用账号默认；填 `--list-models` 里看到的名称 |
+| 超时 / 最大轮数 | 单个任务的时间与轮数上限 |
+
+### 三、怎么用
+
+在任意渠道（桌面 / 网页 / 飞书 / 企微 / QQ）直接说：
+
+```
+用 Qoder 在 workspace/default 里做一个番茄钟页面
+```
+
+它会调用 `delegate_coding_task`，把任务交给 CLI 执行，然后把 **真实结果** 带回来：
+
+- `repo` — 实际干活的目录
+- `changed_files` — 本次真正改动的文件（运行时前后 `git status` 对比得出）
+- `diff_stat` — 改动规模
+
+产物路径就是它汇报的这些，你不用自己去全盘翻找。
+
+### 四、几个注意点
+
+- **不会自动 commit / push**：CLI 只改工作区文件，提交与否由你决定
+- **一个项目一个目录**：大项目建议在 `workspace/default` 下再建子文件夹，避免互相污染
+- **登录有效期**：`qoder login` 的登录态会过期，过期后任务会失败，重新登录一次即可
+- **无 TTY 挂起**：headless 模式下如果权限模式是 `default`，CLI 会等一个永远不来的确认；程序已用 `stdin=DEVNULL` + 默认 `auto` 规避
+- **同仓库并发**：同一个目录同时只跑一个 CLI 任务，别并行发起
+
+> 内置工具 `check_qoder` 可检测 CLI 是否可用，`list_qoder_models` 可列出账号可用的模型。
+
+---
+
 ## 🏗️ 系统架构
 
 ```
@@ -429,6 +496,7 @@ workingAgent/
 │   ├── llm_client.py        # 12 个 LLM 供应商适配器
 │   ├── tools.py             # 30+ 内置工具
 │   ├── office_tools.py      # Word/Excel/PPT/PDF 工具
+│   ├── qoder_cli.py         # 外部编码智能体（Qoder CLI）调用与结果采集
 │   └── ...
 ├── hardware/                # 硬件集成
 │   ├── bridge.py            # Home Assistant + RTSP 摄像头
