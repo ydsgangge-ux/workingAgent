@@ -39,7 +39,7 @@ class STTEngine:
         self._lock = threading.Lock()
 
         # 配置项
-        self.provider = self._config.get("stt_provider", "deepseek")
+        self.provider = self._config.get("stt_provider", "mimo")
         self.language = self._config.get("stt_language", "zh")
 
         # 讯飞凭证
@@ -50,6 +50,14 @@ class STTEngine:
         # DeepSeek 配置（复用主 LLM 配置）
         self.api_key = self._config.get("api_key", "")
         self.api_base = self._config.get("stt_api_base", "https://api.deepseek.com")
+
+        # MiMo 多模态线路：独立 Key / 模型，留空才继承主 LLM 或视觉 Key
+        self.mimo_model = self._config.get("stt_mimo_model", "mimo-v2.6-flash")
+        self.mimo_base = (self._config.get("stt_mimo_base_url") or "").strip() \
+            or "https://api.xiaomimimo.com/v1"
+        self.mimo_api_key = (self._config.get("stt_mimo_api_key") or "").strip() \
+            or (self._config.get("vision_api_key") or "").strip() \
+            or self.api_key
 
     def _detect_backend(self) -> Optional[str]:
         """检测可用后端"""
@@ -72,7 +80,14 @@ class STTEngine:
             if self._check_whisper_local():
                 self._backend = "whisper_local"
                 return "whisper_local"
+        elif self.provider == "mimo":
+            if self._check_mimo():
+                self._backend = "mimo"
+                return "mimo"
 
+        if self._check_mimo():
+            self._backend = "mimo"
+            return "mimo"
         if self._check_faster_whisper():
             self._backend = "faster_whisper"
             return "faster_whisper"
@@ -91,6 +106,9 @@ class STTEngine:
 
     def _check_deepseek(self) -> bool:
         return bool(self.api_key)
+
+    def _check_mimo(self) -> bool:
+        return bool(self.mimo_api_key)
 
     def _check_whisper_local(self) -> bool:
         try:
@@ -112,6 +130,7 @@ class STTEngine:
     def get_backend_name(self) -> str:
         b = self._detect_backend()
         return {
+            "mimo": "MiMo 多模态（直接听音频）",
             "xunfei": "讯飞语音识别（在线）",
             "deepseek": "DeepSeek Whisper（在线）",
             "whisper_local": "本地 Whisper（离线）",
@@ -133,7 +152,9 @@ class STTEngine:
         print(f"[STT] 后端={backend}, 文件={audio_path}")
 
         try:
-            if backend == "xunfei":
+            if backend == "mimo":
+                result = self._recognize_mimo(audio_path)
+            elif backend == "xunfei":
                 result = self._recognize_xunfei(audio_path)
             elif backend == "deepseek":
                 result = self._recognize_deepseek(audio_path)
@@ -145,7 +166,7 @@ class STTEngine:
                 result = {"ok": False, "error": "无可用后端"}
 
             if result.get("ok"):
-                result["backend"] = backend
+                result.setdefault("backend", backend)
                 print(f"[STT] 识别成功: {result['text'][:60]}...")
             else:
                 print(f"[STT] 识别失败: {result.get('error', '未知错误')}")
@@ -168,6 +189,95 @@ class STTEngine:
                 os.unlink(tmp.name)
             except Exception:
                 pass
+
+    # ── MiMo 多模态：直接听音频 ─────────────────────────
+    def _recognize_mimo(self, audio_path: str) -> Dict:
+        """把音频当成文件发给多模态大模型，让它逐字转写"""
+        import urllib.request
+        import urllib.error
+
+        path = Path(audio_path)
+        fmt = path.suffix.lower().lstrip(".") or "wav"
+        if fmt == "mpeg":
+            fmt = "mp3"
+        if fmt not in ("wav", "mp3"):
+            wav = self._to_wav(path)
+            if not wav:
+                return {"ok": False,
+                        "error": f"MiMo 只收 wav/mp3，{fmt} 转码失败（需要 ffmpeg）"}
+            path, fmt = wav, "wav"
+
+        try:
+            b64 = base64.b64encode(path.read_bytes()).decode()
+        except Exception as e:
+            return {"ok": False, "error": f"读取音频失败: {e}"}
+        if len(b64) > 10 * 1024 * 1024:
+            return {"ok": False, "error": "音频超过 10MB，请先压缩或裁短"}
+
+        # 模型偶尔只把转写写进 reasoning_content 或直接空返回，换一句再问一次
+        for prompt in ("请逐字转写上面这段语音，只输出文字，不要解释。",
+                       "上面的语音说了什么？直接给出转写结果。"):
+            payload = {
+                "model": self.mimo_model,
+                "messages": [
+                    {"role": "user", "content": [
+                        {"type": "input_audio",
+                         "input_audio": {"data": b64, "format": fmt}}
+                    ]},
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": 1000,
+            }
+            req = urllib.request.Request(
+                f"{self.mimo_base.rstrip('/')}/chat/completions",
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={"Authorization": f"Bearer {self.mimo_api_key}",
+                         "Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    data = json.loads(resp.read().decode("utf-8", "ignore"))
+            except urllib.error.HTTPError as e:
+                body = ""
+                try:
+                    body = e.read().decode("utf-8", "ignore")[:200]
+                except Exception:
+                    pass
+                return {"ok": False, "error": f"MiMo HTTP {e.code}: {body}"}
+            except Exception as e:
+                return {"ok": False, "error": f"MiMo 请求失败: {e}"}
+
+            node = ((data.get("choices") or [{}])[0] or {}).get("message") or {}
+            text = (node.get("content") or "").strip() \
+                or (node.get("reasoning_content") or "").strip()
+            if text:
+                return {"ok": True, "text": text}
+
+        return {"ok": False, "error": "MiMo 没有返回转写结果"}
+
+    @staticmethod
+    def _to_wav(src: Path) -> Optional[Path]:
+        """用 ffmpeg（PATH 或 imageio-ffmpeg 自带）转 16k 单声道 wav"""
+        import shutil
+        import subprocess
+
+        ff = shutil.which("ffmpeg")
+        if not ff:
+            try:
+                import imageio_ffmpeg
+                ff = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:
+                ff = None
+        if not ff:
+            return None
+        out = Path(tempfile.gettempdir()) / f"stt_{int(time.time())}.wav"
+        try:
+            subprocess.run([ff, "-y", "-i", str(src), "-ar", "16000", "-ac", "1",
+                            str(out)], timeout=30, capture_output=True)
+        except Exception:
+            return None
+        return out if out.exists() and out.stat().st_size > 1000 else None
 
     # ── 讯飞实时语音转写 API ────────────────────────────
     def _recognize_xunfei(self, audio_path: str) -> Dict:
@@ -410,11 +520,17 @@ class STTEngine:
                     return {"ok": False, "error": "API 返回空文本"}
             except Exception as e:
                 err_str = str(e)
-                if "404" in err_str or "not found" in err_str.lower():
+                low = err_str.lower()
+                if any(k in low for k in
+                       ("404", "401", "403", "405", "not found", "not support")):
+                    # 该线路不支持音频时，降级到 MiMo 多模态（有 Key 才转）
+                    if self._check_mimo():
+                        print("[STT] DeepSeek Whisper 不可用，降级到 MiMo 多模态")
+                        return self._recognize_mimo(audio_path)
                     return {
                         "ok": False,
                         "error": "当前 API 不支持音频识别（DeepSeek 暂不支持 Whisper）。"
-                               "请在 config.json 中设置 stt_provider 为 'xunfei' 或 'whisper_local'"
+                               "请在设置里把语音识别线路改为 MiMo / 讯飞 / 本地 Whisper"
                     }
                 return {"ok": False, "error": f"API 请求失败: {e}"}
 
@@ -509,10 +625,13 @@ class STTEngine:
             "  pip install websocket-client\n"
             "  在 config.json 中设置 xunfei_app_id / xunfei_api_key / xunfei_api_secret\n"
             "  申请地址：https://www.xfyun.cn/\n\n"
-            "方案3 - DeepSeek Whisper：\n"
+            "方案3 - MiMo 多模态（把语音当文件听）：\n"
+            "  设置 stt_provider: \"mimo\"，填 stt_mimo_api_key（留空继承视觉/主 Key）\n"
+            "  模型 stt_mimo_model 默认 mimo-v2.6-flash，非 wav/mp3 需 ffmpeg 转码\n\n"
+            "方案4 - DeepSeek Whisper：\n"
             "  需要兼容 OpenAI audio API 的服务\n"
             "  在 config.json 中设置 stt_provider: \"deepseek\"\n\n"
-            "方案4 - 本地 Whisper（离线）：\n"
+            "方案5 - 本地 Whisper（离线）：\n"
             "  pip install openai-whisper\n"
             "  在 config.json 中设置 stt_provider: \"whisper_local\"\n"
         )

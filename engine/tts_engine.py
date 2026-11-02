@@ -11,11 +11,15 @@
 """
 
 import asyncio
+import base64
+import json
 import os
 import re
 import sys
 import threading
 import tempfile
+import urllib.error
+import urllib.request
 from typing import Optional, Callable
 
 
@@ -29,6 +33,54 @@ VOICE_OPTIONS = [
     ("zh-TW-HsiaoChenNeural", "晓臻·台湾·女"),
     ("zh-HK-HiuMaanNeural",   "晓曼·粤语·女"),
 ]
+
+
+# MiMo TTS 预置音色（mimo-v2.5-tts）
+MIMO_VOICES = [
+    ("冰糖", "冰糖·女·中文（默认）"),
+    ("茉莉", "茉莉·女·中文"),
+    ("苏打", "苏打·男·中文"),
+    ("白桦", "白桦·男·中文"),
+    ("Mia",    "Mia·女·英文"),
+    ("Chloe",  "Chloe·女·英文"),
+    ("Milo",   "Milo·男·英文"),
+    ("Dean",   "Dean·男·英文"),
+]
+
+MIMO_MODELS = [
+    ("mimo-v2.5-tts",            "预置音色（支持唱歌）"),
+    ("mimo-v2.5-tts-voicedesign", "文本设计音色"),
+    ("mimo-v2.5-tts-voiceclone",  "音色复刻（克隆声音）"),
+]
+
+MIMO_BASE = "https://api.xiaomimimo.com/v1"
+
+
+def _load_tts_cfg() -> dict:
+    try:
+        from desktop.config import load_config
+        return load_config() or {}
+    except Exception:
+        return {}
+
+
+def _inherit_mimo_key(cfg: dict) -> str:
+    """TTS 专用 Key 为空时，按优先级继承主 LLM / 视觉 Key"""
+    for k in ("vision_api_key", "api_key", "image_api_key"):
+        v = str(cfg.get(k) or "").strip()
+        if v:
+            return v
+    return os.environ.get("MIMO_API_KEY", "")
+
+
+def _clean_tts_text(text: str, keep_tags: bool = False) -> str:
+    """去掉 Markdown 噪音。keep_tags=True 时保留 () []，供 MiMo 风格/音频标签使用"""
+    src = text or ""
+    if keep_tags:
+        clean = re.sub(r'[*#`_<>|]', '', src)
+    else:
+        clean = re.sub(r'[*#`_\[\]()<>|]', '', src)
+    return re.sub(r'\n+', '。', clean).strip()
 
 
 class TTSEngine:
@@ -119,6 +171,15 @@ class TTSEngine:
         self._stop_flag = False
 
         def _run():
+            cfg = _load_tts_cfg()
+            if str(cfg.get("tts_provider", "edge") or "edge").lower() == "mimo":
+                print(f"[TTS] 后端=MiMo TTS, 文本={text[:30]}...")
+                if self._speak_mimo(text):
+                    if on_done and not self._stop_flag:
+                        on_done()
+                    return
+                print("[TTS] MiMo TTS 失败，降级到 Edge")
+
             backend = self._detect_backend()
             print(f"[TTS] 后端={backend}, 文本={text[:30]}...")
             try:
@@ -160,6 +221,166 @@ class TTSEngine:
             self._backend = "pyttsx3"
         except Exception as e:
             print(f"[TTS] pyttsx3 初始化失败: {e}")
+
+    # ── 仅合成、不播放（供 QQ 等渠道取用）──────────────
+    def synthesize(self, text: str, style: Optional[str] = None,
+                   out_path: Optional[str] = None) -> Optional[str]:
+        """把文本合成成音频文件并返回路径（不播放）。失败返回 None。
+
+        provider=edge → mp3；provider=mimo → wav。
+        style 为自然语言风格指令（MiMo 专用），如"慵懒，语速慢一点"。
+        支持 MiMo 的括号标签：(唱歌)歌词、(东北话)……
+        """
+        cfg = _load_tts_cfg()
+        provider = str(cfg.get("tts_provider", "edge") or "edge").lower()
+        keep_tags = provider == "mimo"
+        clean = _clean_tts_text(text, keep_tags=keep_tags)
+        if not clean:
+            return None
+
+        if not out_path:
+            suffix = ".wav" if provider == "mimo" else ".mp3"
+            out_path = tempfile.mktemp(prefix="agi_tts_", suffix=suffix)
+
+        if provider == "mimo":
+            ok = self._synth_mimo(clean, style, out_path, cfg)
+        else:
+            ok = self._synth_edge(clean, out_path, cfg)
+        return out_path if ok else None
+
+    def _synth_edge(self, text: str, path: str, cfg: dict) -> bool:
+        """edge-tts 只合成到文件"""
+        try:
+            import edge_tts
+        except ImportError:
+            print("[TTS] 未安装 edge-tts，可运行: pip install edge-tts")
+            return False
+        voice = cfg.get("tts_voice") or self.voice
+        try:
+            rate = f"{int(cfg.get('tts_rate', 0) or 0):+d}%"
+        except Exception:
+            rate = "+0%"
+
+        async def _go():
+            await edge_tts.Communicate(text, voice, rate=rate).save(path)
+
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(_go())
+            finally:
+                loop.close()
+        except Exception as e:
+            print(f"[TTS] edge 合成失败: {e}")
+            return False
+        return os.path.exists(path) and os.path.getsize(path) > 100
+
+    def _synth_mimo(self, text: str, style: Optional[str],
+                    path: str, cfg: dict) -> bool:
+        """MiMo TTS：OpenAI 兼容接口，返回 base64 音频"""
+        model = str(cfg.get("tts_mimo_model") or "mimo-v2.5-tts")
+        base = str(cfg.get("tts_mimo_base_url") or "").strip() or MIMO_BASE
+        key = str(cfg.get("tts_mimo_api_key") or "").strip() or _inherit_mimo_key(cfg)
+        if not key:
+            print("[TTS] MiMo 缺少 API Key")
+            return False
+
+        user_msg = style or str(cfg.get("tts_mimo_style") or "")
+        audio = {"format": "wav"}
+
+        if model.endswith("voicedesign"):
+            # user 消息即音色描述（必填）
+            user_msg = user_msg or "年轻女性，温柔清亮，语速偏慢"
+            audio["optimize_text_preview"] = False
+        elif model.endswith("voiceclone"):
+            sample = str(cfg.get("tts_mimo_sample") or "").strip()
+            if not sample or not os.path.exists(sample):
+                print("[TTS] MiMo 音色复刻缺少样本文件（tts_mimo_sample）")
+                return False
+            mime = "audio/wav" if sample.lower().endswith(".wav") else "audio/mpeg"
+            try:
+                with open(sample, "rb") as f:
+                    raw = f.read()
+            except Exception as e:
+                print(f"[TTS] 读取克隆样本失败: {e}")
+                return False
+            if len(raw) > 10 * 1024 * 1024:
+                print("[TTS] 克隆样本超过 10MB")
+                return False
+            audio["voice"] = f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+        else:
+            audio["voice"] = str(cfg.get("tts_mimo_voice") or "冰糖")
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "user", "content": user_msg},
+                {"role": "assistant", "content": text},
+            ],
+            "audio": audio,
+        }
+        req = urllib.request.Request(
+            f"{base.rstrip('/')}/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Authorization": f"Bearer {key}",
+                     "Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                data = json.loads(resp.read().decode("utf-8", "ignore"))
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", "ignore")[:200]
+            except Exception:
+                pass
+            print(f"[TTS] MiMo HTTP {e.code}: {body}")
+            return False
+        except Exception as e:
+            print(f"[TTS] MiMo 请求失败: {e}")
+            return False
+
+        node = ((data.get("choices") or [{}])[0] or {}).get("message") or {}
+        b64 = (node.get("audio") or {}).get("data") or ""
+        if not b64:
+            print(f"[TTS] MiMo 未返回音频: {str(data)[:200]}")
+            return False
+        try:
+            with open(path, "wb") as f:
+                f.write(base64.b64decode(b64))
+        except Exception as e:
+            print(f"[TTS] 写入音频失败: {e}")
+            return False
+        return os.path.getsize(path) > 100
+
+    def _speak_mimo(self, text: str) -> bool:
+        """MiMo TTS 合成（wav）并播放"""
+        path = self.synthesize(text)
+        if not path:
+            return False
+        if self._stop_flag:
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
+            return False
+        if sys.platform == "win32":
+            try:
+                import winsound
+                winsound.PlaySound(path, winsound.SND_FILENAME)
+                return True
+            except Exception as e:
+                print(f"[TTS] MiMo wav 播放失败: {e}")
+                return False
+            finally:
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
+        cmd = ["afplay"] if sys.platform == "darwin" else ["ffplay", "-autoexit", "-nodisp"]
+        return self._play_system(path, cmd)
 
     def _speak_edge(self, text: str) -> bool:
         """Edge TTS 合成 + 播放"""

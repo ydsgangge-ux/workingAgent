@@ -49,12 +49,26 @@ DEFAULT_CONFIG = {
     "vrm_width":         220,    # VRM 面板宽度 (px)
     "vrm_height":        220,    # VRM 面板高度 (px)
     # ── 语音识别（STT）──
-    "stt_provider":      "deepseek",  # "deepseek" | "xunfei" | "whisper_local"
+    "stt_provider":      "mimo",      # "mimo" | "xunfei" | "whisper_local" | "faster_whisper"
     "stt_language":      "zh",        # 识别语言
+    "stt_mimo_model":    "mimo-v2.6-flash",              # 多模态大模型直接听音频
+    "stt_mimo_api_key":  "",                             # 留空继承主 LLM / vision key
+    "stt_mimo_base_url": "",                             # 留空用 https://api.xiaomimimo.com/v1
     "xunfei_app_id":     "",          # 讯飞开放平台 APPID
     "xunfei_api_key":    "",          # 讯飞 API Key
     "xunfei_api_secret": "",          # 讯飞 API Secret
     "whisper_model":     "base",      # 本地 Whisper 模型：tiny/base/small/medium/large
+    # ── 语音合成（TTS）──
+    "tts_enabled":       False,       # 桌面端是否启用语音播放
+    "tts_provider":      "edge",      # "edge"（微软，免费）| "mimo"（小米，支持唱歌/克隆）
+    "tts_voice":         "zh-CN-XiaoxiaoNeural",         # edge 音色
+    "tts_rate":          0,                              # edge 语速偏移（-50 ~ +50）
+    "tts_mimo_model":    "mimo-v2.5-tts",                # mimo-v2.5-tts / -voicedesign / -voiceclone
+    "tts_mimo_voice":    "冰糖",                          # 预置音色：冰糖/茉莉/苏打/白桦/Mia/Chloe/Milo/Dean
+    "tts_mimo_style":    "",                             # 自然语言风格指令，如"慵懒，语速慢一点"
+    "tts_mimo_api_key":  "",                             # 留空继承主 LLM / vision key
+    "tts_mimo_base_url": "",                             # 留空用 https://api.xiaomimimo.com/v1
+    "tts_mimo_sample":   "",                             # 音色复刻样本（mp3/wav 路径）
     # ── 运行模式 ──
     "mode":              "screen",  # "screen"（屏幕模式，SimLife运行） | "hardware"（硬件模式，真实传感器+视觉）
     # ── 传感器模块（Sensor Agent）──
@@ -83,6 +97,10 @@ DEFAULT_CONFIG = {
     "qq_show_thinking":   True,                          # 收到消息先发"正在思考…"
     "qq_reply_length":    "normal",                      # 回复长度：short / normal / long
     "qq_split_long":      True,                          # 长回复拆成多条发送
+    "qq_voice_enable":    False,                         # 是否允许发语音
+    "qq_voice_emotion":   0.7,                           # 情绪强度达到该值才主动发语音（0~1）
+    "qq_voice_cooldown":  600,                           # 同一人语音冷却（秒）
+    "qq_voice_group":     False,                         # 群聊里是否也发语音
     # ── 内嵌可见浏览器（CDP 同源驱动）──
     "use_embedded_browser":  False,   # 开启后主程序内嵌浏览器 Tab，AI 通过 CDP 操作同一页面（保留登录态）
     "embedded_browser_port": 9222,    # QtWebEngine CDP 调试端口

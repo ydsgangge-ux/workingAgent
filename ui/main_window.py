@@ -1942,7 +1942,23 @@ class SettingsPage(QWidget):
         self._tts_enable.setChecked(self._cfg.get("tts_enabled", False))
         tts_lay.addWidget(self._tts_enable, 0, 1)
 
-        tts_lay.addWidget(QLabel("声音选择："), 1, 0)
+        tts_lay.addWidget(QLabel("合成线路："), 1, 0)
+        self._tts_provider = QComboBox()
+        self._tts_provider.setStyleSheet(COMBO_STYLE)
+        self._tts_provider.addItem("Edge（微软在线，免费，默认）", "edge")
+        self._tts_provider.addItem("MiMo TTS（支持唱歌 / 克隆音色）", "mimo")
+        _saved_tp = str(self._cfg.get("tts_provider", "edge") or "edge")
+        _i_tp = self._tts_provider.findData(_saved_tp)
+        self._tts_provider.setCurrentIndex(_i_tp if _i_tp >= 0 else 0)
+        self._tts_provider.currentIndexChanged.connect(self._on_tts_provider_changed)
+        tts_lay.addWidget(self._tts_provider, 1, 1)
+
+        # ── Edge 配置区 ──
+        self._tts_edge_widget = QWidget()
+        edge_lay = QGridLayout(self._tts_edge_widget)
+        edge_lay.setContentsMargins(0, 0, 0, 0)
+
+        edge_lay.addWidget(QLabel("声音选择："), 0, 0)
         self._tts_voice = QComboBox()
         from engine.tts_engine import VOICE_OPTIONS
         for vid, vname in VOICE_OPTIONS:
@@ -1958,9 +1974,9 @@ class SettingsPage(QWidget):
             "QComboBox QAbstractItemView{background:#21262d;color:#e6edf3;"
             "selection-background-color:#1f6feb;}"
         )
-        tts_lay.addWidget(self._tts_voice, 1, 1)
+        edge_lay.addWidget(self._tts_voice, 0, 1)
 
-        tts_lay.addWidget(QLabel("语速调节："), 2, 0)
+        edge_lay.addWidget(QLabel("语速调节："), 1, 0)
         rate_row = QHBoxLayout()
         self._tts_rate = QSlider(Qt.Orientation.Horizontal)
         self._tts_rate.setRange(-50, 50)
@@ -1971,7 +1987,7 @@ class SettingsPage(QWidget):
         )
         rate_row.addWidget(self._tts_rate)
         rate_row.addWidget(self._tts_rate_lbl)
-        tts_lay.addLayout(rate_row, 2, 1)
+        edge_lay.addLayout(rate_row, 1, 1)
 
         # 检测 edge-tts 是否安装
         try:
@@ -1983,7 +1999,67 @@ class SettingsPage(QWidget):
             tts_status_color = "#d29922"
         tts_status_lbl = QLabel(tts_status)
         tts_status_lbl.setStyleSheet(f"color:{tts_status_color};font-size:11px;")
-        tts_lay.addWidget(tts_status_lbl, 3, 1)
+        edge_lay.addWidget(tts_status_lbl, 2, 1)
+
+        tts_lay.addWidget(self._tts_edge_widget, 2, 0, 1, 2)
+
+        # ── MiMo TTS 配置区 ──
+        self._tts_mimo_widget = QWidget()
+        mimo_lay = QGridLayout(self._tts_mimo_widget)
+        mimo_lay.setContentsMargins(0, 0, 0, 0)
+
+        mimo_lay.addWidget(QLabel("模型："), 0, 0)
+        self._tts_mimo_model = QComboBox()
+        self._tts_mimo_model.setStyleSheet(COMBO_STYLE)
+        from engine.tts_engine import MIMO_MODELS, MIMO_VOICES
+        for mid, mname in MIMO_MODELS:
+            self._tts_mimo_model.addItem(mname, mid)
+        _i_mm = self._tts_mimo_model.findData(
+            str(self._cfg.get("tts_mimo_model", "mimo-v2.5-tts")))
+        self._tts_mimo_model.setCurrentIndex(_i_mm if _i_mm >= 0 else 0)
+        mimo_lay.addWidget(self._tts_mimo_model, 0, 1)
+
+        mimo_lay.addWidget(QLabel("预置音色："), 1, 0)
+        self._tts_mimo_voice = QComboBox()
+        self._tts_mimo_voice.setStyleSheet(COMBO_STYLE)
+        for vid, vname in MIMO_VOICES:
+            self._tts_mimo_voice.addItem(vname, vid)
+        _i_mv = self._tts_mimo_voice.findData(
+            str(self._cfg.get("tts_mimo_voice", "冰糖")))
+        self._tts_mimo_voice.setCurrentIndex(_i_mv if _i_mv >= 0 else 0)
+        mimo_lay.addWidget(self._tts_mimo_voice, 1, 1)
+
+        mimo_lay.addWidget(QLabel("风格指令："), 2, 0)
+        self._tts_mimo_style = QLineEdit(self._cfg.get("tts_mimo_style", ""))
+        self._tts_mimo_style.setPlaceholderText(
+            "如：慵懒，语速慢一点；文本开头写 (唱歌) 可唱歌；设计音色时这里写音色描述")
+        mimo_lay.addWidget(self._tts_mimo_style, 2, 1)
+
+        mimo_lay.addWidget(QLabel("API Key："), 3, 0)
+        self._tts_mimo_key = QLineEdit(self._cfg.get("tts_mimo_api_key", ""))
+        self._tts_mimo_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._tts_mimo_key.setPlaceholderText("留空继承视觉 / 主 LLM 的 Key")
+        mimo_lay.addWidget(self._tts_mimo_key, 3, 1)
+
+        mimo_lay.addWidget(QLabel("克隆样本："), 4, 0)
+        sample_row = QHBoxLayout()
+        self._tts_mimo_sample = QLineEdit(self._cfg.get("tts_mimo_sample", ""))
+        self._tts_mimo_sample.setPlaceholderText("音色复刻用：mp3/wav 样本路径（≤10MB）")
+        sample_row.addWidget(self._tts_mimo_sample)
+        btn_sample = QPushButton("选择…")
+        btn_sample.setFixedWidth(64)
+        btn_sample.clicked.connect(self._pick_tts_sample)
+        sample_row.addWidget(btn_sample)
+        mimo_lay.addLayout(sample_row, 4, 1)
+
+        mimo_note = QLabel("唱歌：选「预置音色」，回复文本以 (唱歌) 开头；"
+                           "克隆：选「音色复刻」并指定样本文件。")
+        mimo_note.setStyleSheet("color:#8b949e;font-size:11px;")
+        mimo_note.setWordWrap(True)
+        mimo_lay.addWidget(mimo_note, 5, 1)
+
+        tts_lay.addWidget(self._tts_mimo_widget, 3, 0, 1, 2)
+        self._on_tts_provider_changed(self._tts_provider.currentIndex())
 
         # ── 思考模式（Thinking Mode）──
         think_box = QGroupBox("🧠 思考模式（Thinking Mode）")
@@ -2057,9 +2133,11 @@ class SettingsPage(QWidget):
         stt_lay.addWidget(QLabel("识别引擎："), 1, 0)
         self._stt_provider = QComboBox()
         self._stt_provider.setStyleSheet(COMBO_STYLE)
-        self._stt_provider.addItem("DeepSeek Whisper（在线，复用主 API Key）", "deepseek")
+        self._stt_provider.addItem("MiMo 多模态（直接听音频，推荐）", "mimo")
         self._stt_provider.addItem("讯飞语音识别（在线，中文最优）", "xunfei")
+        self._stt_provider.addItem("本地 Faster Whisper（离线，需下载模型）", "faster_whisper")
         self._stt_provider.addItem("本地 Whisper（离线，需下载模型）", "whisper_local")
+        self._stt_provider.addItem("DeepSeek Whisper（在线，多用于兼容 OpenAI 的服务）", "deepseek")
         saved_stt = self._cfg.get("stt_provider", "deepseek")
         for i in range(self._stt_provider.count()):
             if self._stt_provider.itemData(i) == saved_stt:
@@ -2094,6 +2172,26 @@ class SettingsPage(QWidget):
         xunfei_lay.addWidget(xunfei_link, 3, 1)
 
         stt_lay.addWidget(self._stt_xunfei_widget, 2, 0, 1, 2)
+
+        # MiMo 多模态线路（默认隐藏）
+        self._stt_mimo_widget = QWidget()
+        stt_mimo_lay = QGridLayout(self._stt_mimo_widget)
+        stt_mimo_lay.setContentsMargins(0, 0, 0, 0)
+        stt_mimo_lay.addWidget(QLabel("模型："), 0, 0)
+        self._stt_mimo_model = QLineEdit(
+            self._cfg.get("stt_mimo_model", "mimo-v2.6-flash"))
+        self._stt_mimo_model.setPlaceholderText("mimo-v2.6-flash / mimo-v2.5")
+        stt_mimo_lay.addWidget(self._stt_mimo_model, 0, 1)
+        stt_mimo_lay.addWidget(QLabel("API Key："), 1, 0)
+        self._stt_mimo_key = QLineEdit(self._cfg.get("stt_mimo_api_key", ""))
+        self._stt_mimo_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._stt_mimo_key.setPlaceholderText("留空继承视觉 / 主 LLM 的 Key")
+        stt_mimo_lay.addWidget(self._stt_mimo_key, 1, 1)
+        stt_mimo_note = QLabel("把语音当文件发给多模态大模型，主对话模型可继续用自己喜欢的。")
+        stt_mimo_note.setStyleSheet("color:#8b949e;font-size:11px;")
+        stt_mimo_note.setWordWrap(True)
+        stt_mimo_lay.addWidget(stt_mimo_note, 2, 1)
+        stt_lay.addWidget(self._stt_mimo_widget, 3, 0, 1, 2)
 
         # 本地 Whisper 模型选择（默认隐藏）
         self._stt_whisper_widget = QWidget()
@@ -2345,17 +2443,51 @@ class SettingsPage(QWidget):
         self._qq_split_long.setChecked(bool(self._cfg.get("qq_split_long", True)))
         qq_lay.addWidget(self._qq_split_long, 7, 0, 1, 2)
 
-        qq_hint = QLabel("需本机登录 QQ NT 并安装 NapCatQQ，开启 WebSocket 服务器。群聊只在 @ 机器人时响应。以上设置仅影响 QQ 线路，重启后生效。")
+        self._qq_voice_enable = QCheckBox("允许发语音（情绪高 / 用户要求时说语音）")
+        self._qq_voice_enable.setChecked(bool(self._cfg.get("qq_voice_enable", False)))
+        qq_lay.addWidget(self._qq_voice_enable, 8, 0, 1, 2)
+
+        qq_lay.addWidget(QLabel("语音情绪阈值:"), 9, 0)
+        qq_voice_row = QHBoxLayout()
+        self._qq_voice_emotion = QSpinBox()
+        self._qq_voice_emotion.setRange(0, 100)
+        self._qq_voice_emotion.setSingleStep(5)
+        self._qq_voice_emotion.setSuffix("%")
+        self._qq_voice_emotion.setValue(
+            int(round(float(self._cfg.get("qq_voice_emotion", 0.7) or 0.7) * 100)))
+        qq_voice_row.addWidget(self._qq_voice_emotion)
+        qq_voice_row.addWidget(QLabel("（情绪强度超过该值就发语音）"))
+        qq_voice_row.addStretch()
+        qq_lay.addLayout(qq_voice_row, 9, 1)
+
+        qq_lay.addWidget(QLabel("语音冷却:"), 10, 0)
+        qq_cooldown_row = QHBoxLayout()
+        self._qq_voice_cooldown = QSpinBox()
+        self._qq_voice_cooldown.setRange(0, 3600)
+        self._qq_voice_cooldown.setSingleStep(60)
+        self._qq_voice_cooldown.setSuffix(" 秒")
+        self._qq_voice_cooldown.setValue(
+            int(float(self._cfg.get("qq_voice_cooldown", 600) or 600)))
+        qq_cooldown_row.addWidget(self._qq_voice_cooldown)
+        qq_cooldown_row.addWidget(QLabel("（同一人两次语音的最小间隔）"))
+        qq_cooldown_row.addStretch()
+        qq_lay.addLayout(qq_cooldown_row, 10, 1)
+
+        self._qq_voice_group = QCheckBox("群聊里也发语音")
+        self._qq_voice_group.setChecked(bool(self._cfg.get("qq_voice_group", False)))
+        qq_lay.addWidget(self._qq_voice_group, 11, 0, 1, 2)
+
+        qq_hint = QLabel("需本机登录 QQ NT 并安装 NapCatQQ，开启 WebSocket 服务器。群聊只在 @ 机器人时响应。语音合成线路在「语音合成（TTS）」里选，收到语音的识别线路在「语音识别（STT）」里选。以上设置仅影响 QQ 线路，保存即生效。")
         qq_hint.setStyleSheet("color:#8b949e;font-size:11px;")
         qq_hint.setWordWrap(True)
-        qq_lay.addWidget(qq_hint, 8, 1)
+        qq_lay.addWidget(qq_hint, 12, 1)
 
         qq_status = ("✅ websocket-client 已安装" if websocket_ok
                      else "⚠️ 未安装，运行: pip install websocket-client>=1.6.0")
         qq_status_lbl = QLabel(qq_status)
         qq_status_lbl.setStyleSheet(
             f"color:{'#3fb950' if websocket_ok else '#d29922'};font-size:11px;")
-        qq_lay.addWidget(qq_status_lbl, 9, 1)
+        qq_lay.addWidget(qq_status_lbl, 13, 1)
 
         layout.addWidget(api_box)
         layout.addWidget(vision_box)
@@ -2560,9 +2692,24 @@ class SettingsPage(QWidget):
 
     def _on_stt_provider_changed(self, idx: int):
         """切换 STT 引擎时显示/隐藏对应的配置区域"""
-        provider = self._stt_provider.itemData(idx) or "deepseek"
+        provider = self._stt_provider.itemData(idx) or "mimo"
         self._stt_xunfei_widget.setVisible(provider == "xunfei")
-        self._stt_whisper_widget.setVisible(provider == "whisper_local")
+        self._stt_whisper_widget.setVisible(
+            provider in ("whisper_local", "faster_whisper"))
+        self._stt_mimo_widget.setVisible(provider == "mimo")
+
+    def _on_tts_provider_changed(self, idx: int):
+        """切换 TTS 线路时显示/隐藏对应的配置区域"""
+        provider = self._tts_provider.itemData(idx) or "edge"
+        self._tts_edge_widget.setVisible(provider == "edge")
+        self._tts_mimo_widget.setVisible(provider == "mimo")
+
+    def _pick_tts_sample(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择音色克隆样本", "",
+            "音频文件 (*.mp3 *.wav)")
+        if path:
+            self._tts_mimo_sample.setText(path)
 
     def _toggle_autostart(self, state):
         from desktop.system import AutoStart
@@ -2611,10 +2758,18 @@ class SettingsPage(QWidget):
         self._cfg["float_opacity"]     = self._opacity_slider.value() / 100.0
         self._cfg["theme"]             = self._theme_combo.currentData() or "dark"
         self._cfg["tts_enabled"]       = self._tts_enable.isChecked()
+        self._cfg["tts_provider"]      = self._tts_provider.currentData() or "edge"
         self._cfg["tts_voice"]         = self._tts_voice.currentData()
         self._cfg["tts_rate"]          = self._tts_rate.value()
+        self._cfg["tts_mimo_model"]    = self._tts_mimo_model.currentData() or "mimo-v2.5-tts"
+        self._cfg["tts_mimo_voice"]    = self._tts_mimo_voice.currentData() or "冰糖"
+        self._cfg["tts_mimo_style"]    = self._tts_mimo_style.text().strip()
+        self._cfg["tts_mimo_api_key"]  = self._tts_mimo_key.text().strip()
+        self._cfg["tts_mimo_sample"]   = self._tts_mimo_sample.text().strip()
         # STT 语音识别
-        self._cfg["stt_provider"]      = self._stt_provider.currentData() or "deepseek"
+        self._cfg["stt_provider"]      = self._stt_provider.currentData() or "mimo"
+        self._cfg["stt_mimo_model"]    = self._stt_mimo_model.text().strip() or "mimo-v2.6-flash"
+        self._cfg["stt_mimo_api_key"]  = self._stt_mimo_key.text().strip()
         self._cfg["xunfei_app_id"]     = self._xunfei_app_id.text().strip()
         self._cfg["xunfei_api_key"]    = self._xunfei_api_key.text().strip()
         self._cfg["xunfei_api_secret"] = self._xunfei_api_secret.text().strip()
@@ -2675,6 +2830,10 @@ class SettingsPage(QWidget):
         self._cfg["qq_show_thinking"]   = self._qq_show_thinking.isChecked()
         self._cfg["qq_reply_length"]    = self._qq_reply_length.currentData()
         self._cfg["qq_split_long"]      = self._qq_split_long.isChecked()
+        self._cfg["qq_voice_enable"]    = self._qq_voice_enable.isChecked()
+        self._cfg["qq_voice_emotion"]   = self._qq_voice_emotion.value() / 100.0
+        self._cfg["qq_voice_cooldown"]  = self._qq_voice_cooldown.value()
+        self._cfg["qq_voice_group"]     = self._qq_voice_group.isChecked()
 
         # 立即应用语言
         try:

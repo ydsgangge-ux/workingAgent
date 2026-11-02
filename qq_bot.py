@@ -21,7 +21,10 @@ import base64
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -46,8 +49,19 @@ def _as_bool(v, default: bool = True) -> bool:
     return bool(v)
 
 
+def _as_float(v, default: float = 0.0) -> float:
+    """兼容数字和字符串，解析失败回退默认值"""
+    try:
+        return float(str(v).strip())
+    except Exception:
+        return default
+
+
 # 从 desktop / ha 配置里允许覆盖的键（新增 QQ 设置时记得加进来）
-QQ_DISPLAY_KEYS = ("qq_show_thinking", "qq_reply_length", "qq_split_long")
+QQ_DISPLAY_KEYS = (
+    "qq_show_thinking", "qq_reply_length", "qq_split_long",
+    "qq_voice_enable", "qq_voice_emotion", "qq_voice_cooldown", "qq_voice_group",
+)
 
 QQ_CFG_KEYS = (
     "qq_enable", "qq_ws_url", "qq_access_token",
@@ -292,6 +306,12 @@ class QQBot:
         # 仅 QQ 线路生效的显示设置
         self._show_thinking = _as_bool(self._cfg.get("qq_show_thinking"), True)
         self._split_long = _as_bool(self._cfg.get("qq_split_long"), True)
+        # 语音相关
+        self._voice_enable = _as_bool(self._cfg.get("qq_voice_enable"), False)
+        self._voice_emotion = _as_float(self._cfg.get("qq_voice_emotion"), 0.7)
+        self._voice_cooldown = _as_float(self._cfg.get("qq_voice_cooldown"), 600)
+        self._voice_group = _as_bool(self._cfg.get("qq_voice_group"), False)
+        self._last_voice = {}          # user_id -> 上次发语音的时间戳
 
     def set_agent(self, agent):
         """引擎重载时更新 agent 引用，无需重连 QQ"""
@@ -368,13 +388,17 @@ class QQBot:
             cfg = _desktop_config() or {}
             self._show_thinking = _as_bool(cfg.get("qq_show_thinking"), True)
             self._split_long = _as_bool(cfg.get("qq_split_long"), True)
+            self._voice_enable = _as_bool(cfg.get("qq_voice_enable"), False)
+            self._voice_emotion = _as_float(cfg.get("qq_voice_emotion"), 0.7)
+            self._voice_cooldown = _as_float(cfg.get("qq_voice_cooldown"), 600)
+            self._voice_group = _as_bool(cfg.get("qq_voice_group"), False)
         except Exception:
             pass
 
     def _handle_message(self, kind: str, target: str, user_id: str,
                         uname: str, uid: str, segs: list, group_ctx: str = ""):
         self._refresh_display_cfg()
-        attachment, text = self._collect(segs)
+        attachment, text, voice_in = self._collect(segs)
 
         # ① 高风险操作确认：y / n 优先消费，避免被当成新任务
         if self._resolve_pending_confirm(kind, target, user_id, text):
@@ -387,7 +411,8 @@ class QQBot:
                 uid,
                 attachment,
                 lambda att: self._run_and_reply(
-                    kind, target, user_id, uname, att, group_ctx=group_ctx),
+                    kind, target, user_id, uname, att, group_ctx=group_ctx,
+                    voice_in=voice_in),
             )
             self._reply(kind, target, "文件已收到，要我怎么处理？直接发指令即可。",
                         at_user=user_id if kind == "group" else "")
@@ -399,16 +424,18 @@ class QQBot:
         if not user_input:
             user_input = "请分析以上内容"
         self._run_and_reply(kind, target, user_id, uname, user_input,
-                            group_ctx=group_ctx)
+                            group_ctx=group_ctx, voice_in=voice_in)
 
     def _run_and_reply(self, kind: str, target: str, user_id: str,
-                       uname: str, user_input: str, group_ctx: str = ""):
+                       uname: str, user_input: str, group_ctx: str = "",
+                       voice_in: bool = False):
         at_user = user_id if kind == "group" else ""
         if self._show_thinking:
             self._reply(kind, target, "正在思考…", at_user=at_user)
 
         uid = (f"qq_group{target}_{user_id}" if kind == "group"
                else f"qq_{user_id}")
+        result = {}
         try:
             from engine.executor import temp_confirm
             with temp_confirm(
@@ -431,6 +458,11 @@ class QQBot:
         reply = self._deliver(kind, target, reply)
         if not reply.strip():
             reply = "（已完成）"
+
+        # 满足条件时改发语音；合成/发送失败则回落到文字
+        if self._should_voice(kind, user_id, user_input, result, voice_in):
+            if self._send_voice(kind, target, user_id, reply, at_user=at_user):
+                return
         self._reply(kind, target, reply, at_user=at_user)
 
     # ── 高风险操作确认（QQ 里回复 y / n）──────────────
@@ -550,8 +582,9 @@ class QQBot:
         )
 
     def _collect(self, segs: list):
-        """返回 (附件标记, 纯文本)"""
+        """返回 (附件标记, 纯文本, 是否含语音消息)"""
         texts, attachments = [], []
+        has_voice = False
         for seg in segs:
             t = seg.get("type")
             data = seg.get("data") or {}
@@ -582,8 +615,101 @@ class QQBot:
             elif t in ("at", "reply", "json", "xml"):
                 continue
             elif t == "record":
-                attachments.append("[语音]")
-        return " ".join(attachments), "".join(texts).strip()
+                has_voice = True
+                heard = self._transcribe_record(data)
+                if heard:
+                    texts.append(f"[语音:{heard}]")
+                else:
+                    attachments.append("[语音]")
+        return " ".join(attachments), "".join(texts).strip(), has_voice
+
+    # ── QQ 语音：下载 → 转码 → 走配置的识别线路 ─────────
+    def _transcribe_record(self, data: dict) -> str:
+        """把 QQ 语音转成文字；失败返回空串，调用方保留 [语音] 占位"""
+        src = self._fetch_record(data)
+        if not src:
+            return ""
+        wav = self._record_to_wav(src)
+        if not wav:
+            return ""
+        try:
+            from engine.stt_engine import STTEngine
+            from desktop.config import load_config
+            cfg = load_config() or {}
+            cfg.update(self._cfg or {})
+            res = STTEngine(cfg).recognize_file(str(wav))
+            if res.get("ok"):
+                text = (res.get("text") or "").strip()
+                if text:
+                    print(f"[QQBot] 语音识别: {text[:60]}")
+                    return text
+            print(f"[QQBot] 语音识别失败: {res.get('error')}")
+        except Exception as e:
+            print(f"[QQBot] 语音识别异常: {e}")
+        return ""
+
+    def _fetch_record(self, data: dict) -> Optional[Path]:
+        """拿到语音本地文件：先试 NapCat 给的路径，再查 get_record，最后下载 URL"""
+        for raw in (data.get("file"), data.get("path")):
+            if not raw:
+                continue
+            p = Path(str(raw).replace("file:///", "").replace("file://", ""))
+            if p.is_file() and p.stat().st_size > 100:
+                return p
+
+        info = {}
+        try:
+            q = self._client.call("get_record", {
+                "file": str(data.get("file") or data.get("file_id") or ""),
+            })
+            info = q.get("data") or {}
+        except Exception as e:
+            print(f"[QQBot] get_record 失败: {e}")
+
+        for raw in (info.get("file"), info.get("path")):
+            if not raw:
+                continue
+            p = Path(str(raw).replace("file:///", "").replace("file://", ""))
+            if p.is_file() and p.stat().st_size > 100:
+                return p
+
+        url = str(data.get("url") or info.get("url") or "")
+        if url.startswith("http"):
+            try:
+                r = requests.get(url, timeout=30)
+                r.raise_for_status()
+                from engine.inbox import save_bytes
+                hint = f"{data.get('file') or ''}{info.get('file') or ''}".lower()
+                ext = ".amr" if "amr" in hint else ".mp3"
+                return save_bytes(r.content, f"voice_{int(time.time())}{ext}")
+            except Exception as e:
+                print(f"[QQBot] 语音下载失败: {e}")
+        return None
+
+    @staticmethod
+    def _record_to_wav(src: Path) -> Optional[Path]:
+        """amr/mp3 → 16k 单声道 wav，供识别引擎使用"""
+        ff = shutil.which("ffmpeg")
+        if not ff:
+            try:
+                import imageio_ffmpeg
+                ff = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:
+                ff = None
+        if not ff:
+            print("[QQBot] 未找到 ffmpeg，无法转码语音（请安装 ffmpeg 或 pip install imageio-ffmpeg）")
+            return None
+        out = Path(tempfile.gettempdir()) / f"qq_voice_{int(time.time())}.wav"
+        try:
+            subprocess.run(
+                [ff, "-y", "-i", str(src), "-ar", "16000", "-ac", "1", str(out)],
+                timeout=30, capture_output=True)
+            if out.exists() and out.stat().st_size > 1000:
+                return out
+            print("[QQBot] ffmpeg 转码结果为空")
+        except Exception as e:
+            print(f"[QQBot] 语音转码失败: {e}")
+        return None
 
     def _save_image(self, data: dict) -> Optional[Path]:
         url = data.get("url") or ""
@@ -655,6 +781,81 @@ class QQBot:
             return None
 
     # ── 回复与交付 ─────────────────────────────────────
+    VOICE_TRIGGERS = ("发语音", "语音吧", "说给我听", "念给我听", "用语音",
+                      "语音回复", "语音说", "发段语音", "唱歌", "唱首歌",
+                      "唱一个", "唱吧")
+    VOICE_MAX_CHARS = 240        # 约 60 秒，超过就改发文字
+
+    def _should_voice(self, kind: str, user_id: str,
+                      user_text: str, result: dict,
+                      voice_in: bool = False) -> bool:
+        """语音触发：用户发来语音 / 明确要求 / 情绪强度达到阈值"""
+        if not self._voice_enable:
+            return False
+        if kind == "group" and not self._voice_group:
+            return False
+        # 1) 用户发来语音，或明确要求（不受冷却限制，但 60 秒内仍限一次）
+        if voice_in or any(t in (user_text or "") for t in self.VOICE_TRIGGERS):
+            return time.time() - self._last_voice.get(user_id, 0) >= 60
+        # 2) 情绪强度达到阈值，且过了冷却
+        try:
+            intensity = float((result.get("emotion") or {}).get("intensity", 0) or 0)
+        except Exception:
+            intensity = 0.0
+        if intensity < self._voice_emotion:
+            return False
+        return time.time() - self._last_voice.get(user_id, 0) >= self._voice_cooldown
+
+    @staticmethod
+    def _voice_plain_text(text: str) -> str:
+        """去掉产物标记、QQ 表情、emoji，只留可朗读的文字"""
+        plain = re.sub(r"\[(?:image|video|download|file):[^\]]*\]", "", text or "")
+        plain = FACE_TOKEN_RE.sub("", plain)
+        plain = re.sub(r"[\U0001F000-\U0001FAFF\u2190-\u2BFF]", "", plain)
+        plain = re.sub(r"[*#`>|]", "", plain)
+        return re.sub(r"\n+", "。", plain).strip()
+
+    def _send_voice(self, kind: str, target: str, user_id: str,
+                    text: str, at_user: str = "") -> bool:
+        """合成语音并以 record 段发送；失败降级为音频文件"""
+        plain = self._voice_plain_text(text)
+        if len(plain) < 2 or len(plain) > self.VOICE_MAX_CHARS:
+            return False
+        try:
+            from engine.tts_engine import get_tts
+            path = get_tts().synthesize(plain)
+        except Exception as e:
+            print(f"[QQBot] 语音合成失败: {e}")
+            return False
+        if not path or not Path(path).exists():
+            return False
+
+        try:
+            src = Path(path).resolve()
+            seg = {"type": "record", "data": {"file": src.as_uri()}}
+            segs = []
+            if at_user:
+                segs += [{"type": "at", "data": {"qq": str(at_user)}},
+                         {"type": "text", "data": {"text": " "}}]
+            segs.append(seg)
+            r = self._send_group_or_private(kind, target, segs)
+            if (r or {}).get("status") == "ok":
+                self._last_voice[user_id] = time.time()
+                print(f"[QQBot] 已发送语音（{len(plain)} 字）")
+                return True
+
+            # 语音段不被支持时退回文件发送
+            print(f"[QQBot] 语音段发送失败，改发文件: {r}")
+            seg = {"type": "file",
+                   "data": {"file": src.as_uri(), "name": src.name}}
+            r2 = self._send_group_or_private(kind, target, [seg])
+            if (r2 or {}).get("status") == "ok":
+                self._last_voice[user_id] = time.time()
+                return True
+        except Exception as e:
+            print(f"[QQBot] 语音发送异常: {e}")
+        return False
+
     def _reply(self, kind: str, target: str, text: str, at_user: str = ""):
         """发送文本：按自然段落分条发出（像人打完一段就发），并转 QQ 表情"""
         text = text or ""
@@ -830,9 +1031,8 @@ class QQBot:
 
     def _send_group_or_private(self, kind: str, target: str, segs: list):
         if kind == "group":
-            self._client.send_group(target, segs)
-        else:
-            self._client.send_private(target, segs)
+            return self._client.send_group(target, segs)
+        return self._client.send_private(target, segs)
 
 
 # ── 便捷入口（main.py / server_start.py 共用）───────────────

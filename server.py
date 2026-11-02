@@ -434,8 +434,10 @@ async def get_providers():
     except Exception:
         pass
     try:
-        from engine.tts_engine import VOICE_OPTIONS
+        from engine.tts_engine import VOICE_OPTIONS, MIMO_VOICES, MIMO_MODELS
         result["tts"] = [{"id": v[0], "name": v[1]} for v in VOICE_OPTIONS]
+        result["tts_mimo_voices"] = [{"id": v[0], "name": v[1]} for v in MIMO_VOICES]
+        result["tts_mimo_models"] = [{"id": v[0], "name": v[1]} for v in MIMO_MODELS]
     except Exception:
         pass
     return result
@@ -1378,6 +1380,24 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
           <span class="toggle-label">按段落分条发送（像真人一句句发）</span>
           <label class="switch"><input type="checkbox" id="cfg-qq-split"><span class="slider"></span></label>
         </div>
+        <div class="toggle">
+          <span class="toggle-label">允许发语音（情绪高 / 用户要求时说语音）</span>
+          <label class="switch"><input type="checkbox" id="cfg-qq-voice"><span class="slider"></span></label>
+        </div>
+        <div class="field">
+          <label>语音情绪阈值：<span id="qq-voice-emotion-val">70%</span></label>
+          <div class="range-row">
+            <input type="range" id="cfg-qq-voice-emotion" min="0" max="100" step="5" value="70">
+          </div>
+        </div>
+        <div class="field">
+          <label>语音冷却（秒）</label>
+          <input id="cfg-qq-voice-cooldown" class="input" type="number" min="0" max="3600" step="60">
+        </div>
+        <div class="toggle">
+          <span class="toggle-label">群聊里也发语音</span>
+          <label class="switch"><input type="checkbox" id="cfg-qq-voice-group"><span class="slider"></span></label>
+        </div>
       </div>
 
       <div class="card">
@@ -1386,13 +1406,29 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
           <span class="toggle-label">回复后自动朗读</span>
           <label class="switch"><input type="checkbox" id="cfg-tts-enable"><span class="slider"></span></label>
         </div>
-        <div class="field"><label>声音</label><select id="cfg-tts-voice" class="input"></select></div>
         <div class="field">
-          <label>语速</label>
-          <div class="range-row">
-            <input type="range" id="cfg-tts-rate" min="-50" max="50" value="0">
-            <span class="range-val" id="tts-rate-val">+0%</span>
+          <label>合成线路</label>
+          <select id="cfg-tts-provider" class="input">
+            <option value="edge">Edge（微软在线，免费，默认）</option>
+            <option value="mimo">MiMo TTS（支持唱歌 / 克隆音色）</option>
+          </select>
+        </div>
+        <div id="tts-edge">
+          <div class="field"><label>声音</label><select id="cfg-tts-voice" class="input"></select></div>
+          <div class="field">
+            <label>语速</label>
+            <div class="range-row">
+              <input type="range" id="cfg-tts-rate" min="-50" max="50" value="0">
+              <span class="range-val" id="tts-rate-val">+0%</span>
+            </div>
           </div>
+        </div>
+        <div id="tts-mimo" style="display:none">
+          <div class="field"><label>模型</label><select id="cfg-tts-mimo-model" class="input"></select></div>
+          <div class="field"><label>预置音色</label><select id="cfg-tts-mimo-voice" class="input"></select></div>
+          <div class="field"><label>风格指令（(唱歌) 可唱歌 / 设计音色的描述）</label><input id="cfg-tts-mimo-style" class="input" type="text"></div>
+          <div class="field"><label>API Key（留空继承视觉/主 Key）</label><input id="cfg-tts-mimo-key" class="input" type="password"></div>
+          <div class="field"><label>克隆样本路径（音色复刻用，mp3/wav）</label><input id="cfg-tts-mimo-sample" class="input" type="text"></div>
         </div>
       </div>
 
@@ -1401,10 +1437,16 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
         <div class="field">
           <label>识别引擎</label>
           <select id="cfg-stt-provider" class="input">
-            <option value="deepseek">DeepSeek Whisper（在线）</option>
+            <option value="mimo">MiMo 多模态（直接听音频，推荐）</option>
             <option value="xunfei">讯飞语音识别（中文最优）</option>
+            <option value="faster_whisper">本地 Faster Whisper（离线）</option>
             <option value="whisper_local">本地 Whisper（离线）</option>
+            <option value="deepseek">DeepSeek Whisper（在线）</option>
           </select>
+        </div>
+        <div id="stt-mimo" style="display:none">
+          <div class="field"><label>模型</label><input id="cfg-stt-mimo-model" class="input" type="text" placeholder="mimo-v2.6-flash"></div>
+          <div class="field"><label>API Key（留空继承视觉/主 Key）</label><input id="cfg-stt-mimo-key" class="input" type="password"></div>
         </div>
         <div id="stt-xunfei" style="display:none">
           <div class="field"><label>APPID</label><input id="cfg-xf-appid" class="input" type="text"></div>
@@ -2208,17 +2250,43 @@ async function loadSettings(){
     document.getElementById('cfg-qq-thinking').checked=cfg.qq_show_thinking!==false;
     document.getElementById('cfg-qq-len').value=cfg.qq_reply_length||'normal';
     document.getElementById('cfg-qq-split').checked=cfg.qq_split_long!==false;
+    document.getElementById('cfg-qq-voice').checked=cfg.qq_voice_enable===true;
+    var qve=document.getElementById('cfg-qq-voice-emotion');
+    qve.value=Math.round((cfg.qq_voice_emotion!==undefined?cfg.qq_voice_emotion:0.7)*100);
+    document.getElementById('qq-voice-emotion-val').textContent=qve.value+'%';
+    qve.oninput=function(){document.getElementById('qq-voice-emotion-val').textContent=qve.value+'%';};
+    document.getElementById('cfg-qq-voice-cooldown').value=cfg.qq_voice_cooldown!==undefined?cfg.qq_voice_cooldown:600;
+    document.getElementById('cfg-qq-voice-group').checked=cfg.qq_voice_group===true;
     // TTS
     document.getElementById('cfg-tts-enable').checked=cfg.tts_enabled||false;
+    document.getElementById('cfg-tts-provider').value=cfg.tts_provider||'edge';
+    var tprod=document.getElementById('cfg-tts-provider');
+    function ttsChange(){
+      var v=tprod.value;
+      document.getElementById('tts-edge').style.display=v==='edge'?'block':'none';
+      document.getElementById('tts-mimo').style.display=v==='mimo'?'block':'none';
+    }
+    tprod.onchange=ttsChange;ttsChange();
     var vsel2=document.getElementById('cfg-tts-voice');
     vsel2.innerHTML='';
     PROVIDERS.tts.forEach(function(v){var o=document.createElement('option');o.value=v.id;o.textContent=v.name;vsel2.appendChild(o);});
     vsel2.value=cfg.tts_voice||'zh-CN-XiaoxiaoNeural';
+    var mmsel=document.getElementById('cfg-tts-mimo-model');mmsel.innerHTML='';
+    (PROVIDERS.tts_mimo_models||[]).forEach(function(v){var o=document.createElement('option');o.value=v.id;o.textContent=v.name;mmsel.appendChild(o);});
+    mmsel.value=cfg.tts_mimo_model||'mimo-v2.5-tts';
+    var mvsel=document.getElementById('cfg-tts-mimo-voice');mvsel.innerHTML='';
+    (PROVIDERS.tts_mimo_voices||[]).forEach(function(v){var o=document.createElement('option');o.value=v.id;o.textContent=v.name;mvsel.appendChild(o);});
+    mvsel.value=cfg.tts_mimo_voice||'冰糖';
+    document.getElementById('cfg-tts-mimo-style').value=cfg.tts_mimo_style||'';
+    document.getElementById('cfg-tts-mimo-key').value=cfg.tts_mimo_api_key||'';
+    document.getElementById('cfg-tts-mimo-sample').value=cfg.tts_mimo_sample||'';
     var tr=document.getElementById('cfg-tts-rate');tr.value=cfg.tts_rate||0;
     document.getElementById('tts-rate-val').textContent=(parseInt(cfg.tts_rate||0)>0?'+':'')+parseInt(cfg.tts_rate||0)+'%';
     tr.oninput=function(){document.getElementById('tts-rate-val').textContent=(tr.value>0?'+':'')+tr.value+'%';};
     // STT
-    document.getElementById('cfg-stt-provider').value=cfg.stt_provider||'deepseek';
+    document.getElementById('cfg-stt-provider').value=cfg.stt_provider||'mimo';
+    document.getElementById('cfg-stt-mimo-model').value=cfg.stt_mimo_model||'mimo-v2.6-flash';
+    document.getElementById('cfg-stt-mimo-key').value=cfg.stt_mimo_api_key||'';
     document.getElementById('cfg-xf-appid').value=cfg.xunfei_app_id||'';
     document.getElementById('cfg-xf-key').value=cfg.xunfei_api_key||'';
     document.getElementById('cfg-xf-secret').value=cfg.xunfei_api_secret||'';
@@ -2226,8 +2294,9 @@ async function loadSettings(){
     var sp=document.getElementById('cfg-stt-provider');
     function sttChange(){
       var v=sp.value;
+      document.getElementById('stt-mimo').style.display=v==='mimo'?'block':'none';
       document.getElementById('stt-xunfei').style.display=v==='xunfei'?'block':'none';
-      document.getElementById('stt-whisper').style.display=v==='whisper_local'?'block':'none';
+      document.getElementById('stt-whisper').style.display=(v==='whisper_local'||v==='faster_whisper')?'block':'none';
     }
     sp.onchange=sttChange;sttChange();
     // Thinking
@@ -2272,10 +2341,23 @@ async function saveSettings(){
   cfg.qq_show_thinking=document.getElementById('cfg-qq-thinking').checked;
   cfg.qq_reply_length=document.getElementById('cfg-qq-len').value;
   cfg.qq_split_long=document.getElementById('cfg-qq-split').checked;
+  cfg.qq_voice_enable=document.getElementById('cfg-qq-voice').checked;
+  cfg.qq_voice_emotion=parseInt(document.getElementById('cfg-qq-voice-emotion').value)/100;
+  var _cd=parseInt(document.getElementById('cfg-qq-voice-cooldown').value);
+  cfg.qq_voice_cooldown=isNaN(_cd)?600:_cd;
+  cfg.qq_voice_group=document.getElementById('cfg-qq-voice-group').checked;
   cfg.tts_enabled=document.getElementById('cfg-tts-enable').checked;
+  cfg.tts_provider=document.getElementById('cfg-tts-provider').value;
   cfg.tts_voice=document.getElementById('cfg-tts-voice').value;
   cfg.tts_rate=parseInt(document.getElementById('cfg-tts-rate').value);
+  cfg.tts_mimo_model=document.getElementById('cfg-tts-mimo-model').value;
+  cfg.tts_mimo_voice=document.getElementById('cfg-tts-mimo-voice').value;
+  cfg.tts_mimo_style=document.getElementById('cfg-tts-mimo-style').value.trim();
+  cfg.tts_mimo_api_key=document.getElementById('cfg-tts-mimo-key').value.trim();
+  cfg.tts_mimo_sample=document.getElementById('cfg-tts-mimo-sample').value.trim();
   cfg.stt_provider=document.getElementById('cfg-stt-provider').value;
+  cfg.stt_mimo_model=document.getElementById('cfg-stt-mimo-model').value.trim()||'mimo-v2.6-flash';
+  cfg.stt_mimo_api_key=document.getElementById('cfg-stt-mimo-key').value.trim();
   cfg.xunfei_app_id=document.getElementById('cfg-xf-appid').value.trim();
   cfg.xunfei_api_key=document.getElementById('cfg-xf-key').value.trim();
   cfg.xunfei_api_secret=document.getElementById('cfg-xf-secret').value.trim();
