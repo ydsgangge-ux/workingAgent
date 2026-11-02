@@ -224,11 +224,13 @@ class TTSEngine:
 
     # ── 仅合成、不播放（供 QQ 等渠道取用）──────────────
     def synthesize(self, text: str, style: Optional[str] = None,
-                   out_path: Optional[str] = None) -> Optional[str]:
+                   out_path: Optional[str] = None,
+                   sing: bool = False) -> Optional[str]:
         """把文本合成成音频文件并返回路径（不播放）。失败返回 None。
 
         provider=edge → mp3；provider=mimo → wav。
         style 为自然语言风格指令（MiMo 专用），如"慵懒，语速慢一点"。
+        sing=True 时给 MiMo 文本开头补 (唱歌) 标签，否则不会唱。
         支持 MiMo 的括号标签：(唱歌)歌词、(东北话)……
         """
         cfg = _load_tts_cfg()
@@ -237,6 +239,8 @@ class TTSEngine:
         clean = _clean_tts_text(text, keep_tags=keep_tags)
         if not clean:
             return None
+        if provider == "mimo":
+            clean = self._apply_mimo_tags(clean, cfg, sing)
 
         if not out_path:
             suffix = ".wav" if provider == "mimo" else ".mp3"
@@ -247,6 +251,15 @@ class TTSEngine:
         else:
             ok = self._synth_edge(clean, out_path, cfg)
         return out_path if ok else None
+
+    @staticmethod
+    def _apply_mimo_tags(text: str, cfg: dict, sing: bool) -> str:
+        """唱歌必须靠 assistant 文本开头的 (唱歌) 标签触发"""
+        stripped = text.lstrip()
+        has_tag = stripped[:1] in ("(", "（", "[")
+        if (sing or bool(cfg.get("tts_mimo_sing"))) and not has_tag:
+            return "(唱歌)" + stripped
+        return text
 
     def _synth_edge(self, text: str, path: str, cfg: dict) -> bool:
         """edge-tts 只合成到文件"""
@@ -286,6 +299,9 @@ class TTSEngine:
             return False
 
         user_msg = style or str(cfg.get("tts_mimo_style") or "")
+        if (not model.endswith("voicedesign")
+                and text.lstrip().startswith(("(唱歌)", "（唱歌）", "[唱歌]"))):
+            user_msg = user_msg or "请把下面的内容当作歌词演唱，旋律自然连贯，咬字清晰有感情。"
         audio = {"format": "wav"}
 
         if model.endswith("voicedesign"):

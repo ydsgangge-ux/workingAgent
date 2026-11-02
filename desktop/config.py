@@ -66,6 +66,7 @@ DEFAULT_CONFIG = {
     "tts_mimo_model":    "mimo-v2.5-tts",                # mimo-v2.5-tts / -voicedesign / -voiceclone
     "tts_mimo_voice":    "冰糖",                          # 预置音色：冰糖/茉莉/苏打/白桦/Mia/Chloe/Milo/Dean
     "tts_mimo_style":    "",                             # 自然语言风格指令，如"慵懒，语速慢一点"
+    "tts_mimo_sing":     False,                          # 唱歌模式：合成文本开头自动加 (唱歌)
     "tts_mimo_api_key":  "",                             # 留空继承主 LLM / vision key
     "tts_mimo_base_url": "",                             # 留空用 https://api.xiaomimimo.com/v1
     "tts_mimo_sample":   "",                             # 音色复刻样本（mp3/wav 路径）

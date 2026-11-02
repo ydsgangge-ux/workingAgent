@@ -87,6 +87,7 @@ ai_notes/
 workspace/
 
 # ── 本地调试/临时文件 ─────────────────────────
+logs/
 .trae/
 downloads/
 inbox/

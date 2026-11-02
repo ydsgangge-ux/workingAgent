@@ -461,7 +461,10 @@ class QQBot:
 
         # 满足条件时改发语音；合成/发送失败则回落到文字
         if self._should_voice(kind, user_id, user_input, result, voice_in):
-            if self._send_voice(kind, target, user_id, reply, at_user=at_user):
+            # 用户让唱歌时，MiMo 需要在文本开头加 (唱歌) 标签才会唱
+            sing = any(k in (user_input or "") for k in ("唱歌", "唱首", "唱一个", "唱吧"))
+            if self._send_voice(kind, target, user_id, reply,
+                                at_user=at_user, sing=sing):
                 return
         self._reply(kind, target, reply, at_user=at_user)
 
@@ -816,14 +819,22 @@ class QQBot:
         return re.sub(r"\n+", "。", plain).strip()
 
     def _send_voice(self, kind: str, target: str, user_id: str,
-                    text: str, at_user: str = "") -> bool:
+                    text: str, at_user: str = "", sing: bool = False) -> bool:
         """合成语音并以 record 段发送；失败降级为音频文件"""
         plain = self._voice_plain_text(text)
+        if sing:
+            # 唱歌时去掉“来，唱给你听：”这类开场白，只唱后面的歌词
+            for sep in ("：", ":"):
+                if sep in plain:
+                    tail = plain.split(sep, 1)[1].strip()
+                    if len(tail) >= 8:
+                        plain = tail
+                    break
         if len(plain) < 2 or len(plain) > self.VOICE_MAX_CHARS:
             return False
         try:
             from engine.tts_engine import get_tts
-            path = get_tts().synthesize(plain)
+            path = get_tts().synthesize(plain, sing=sing)
         except Exception as e:
             print(f"[QQBot] 语音合成失败: {e}")
             return False

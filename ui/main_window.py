@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QScrollArea, QFrame, QStatusBar,
     QSizePolicy, QApplication, QFileDialog,
     QGridLayout, QSpacerItem, QMessageBox,
-    QTextBrowser, QProgressBar, QSpinBox
+    QTextBrowser, QProgressBar, QSpinBox, QAbstractSlider
 )
 
 from desktop.config import APP_NAME, load_config, save_config, get_qss
@@ -549,14 +549,21 @@ class ChatPage(QWidget):
         self._msg_layout = QVBoxLayout(self._msg_container)
         self._msg_layout.setContentsMargins(16, 16, 16, 16)
         self._msg_layout.setSpacing(10)
-        self._msg_layout.addStretch()
+        # 弹性项放在最前：内容不足一屏时贴着输入框，超过一屏后自然从顶部滚出
+        self._msg_layout.insertStretch(0)
         self._scroll.setWidget(self._msg_container)
 
-        # 自动贴底：只要用户在底部附近，内容高度变化就跟随；手动上翻则不打扰
+        # 自动贴底：只由用户主动上翻/拖动才取消，内容变化时始终跟随
         self._auto_scroll = True
+        self._stick_ticks = 0
+        self._stick_timer = QTimer(self)
+        self._stick_timer.setInterval(60)
+        self._stick_timer.timeout.connect(self._stick_tick)
         _sb = self._scroll.verticalScrollBar()
         _sb.rangeChanged.connect(self._on_scroll_range_changed)
         _sb.valueChanged.connect(self._on_scroll_value_changed)
+        _sb.actionTriggered.connect(self._on_scroll_action)
+        self._scroll.viewport().installEventFilter(self)
 
         # 输入区
         input_frame = QFrame()
@@ -717,6 +724,11 @@ class ChatPage(QWidget):
 
     def eventFilter(self, obj, event):
         from PyQt6.QtCore import QEvent
+        # 鼠标滚轮主动上翻时，停止自动贴底
+        if obj is self._scroll.viewport() and event.type() == QEvent.Type.Wheel:
+            sb = self._scroll.verticalScrollBar()
+            if event.angleDelta().y() > 0 and sb.value() < sb.maximum() - 2:
+                self._auto_scroll = False
         if obj is self._input and event.type() == QEvent.Type.KeyPress:
             # Tab / Enter 确认补全
             if (self._completer.isVisible() and
@@ -869,7 +881,7 @@ class ChatPage(QWidget):
         bl.addWidget(img_lbl)
         if not is_user:
             bl.addStretch()
-        self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
+        self._msg_layout.addWidget(bubble)
         self._scroll_to_bottom(force=is_user)
 
     def fill_input(self, text: str):
@@ -882,16 +894,12 @@ class ChatPage(QWidget):
 
     def add_user_message(self, text: str):
         bubble = MessageBubble(text, is_user=True)
-        self._msg_layout.insertWidget(
-            self._msg_layout.count() - 1, bubble
-        )
+        self._msg_layout.addWidget(bubble)
         self._scroll_to_bottom(force=True)   # 自己发消息必定贴底
 
     def add_ai_message(self, text: str, meta: dict = None):
         bubble = MessageBubble(text, is_user=False, meta=meta)
-        self._msg_layout.insertWidget(
-            self._msg_layout.count() - 1, bubble
-        )
+        self._msg_layout.addWidget(bubble)
         self._scroll_to_bottom()
 
     def add_thinking_indicator(self) -> QLabel:
@@ -901,10 +909,7 @@ class ChatPage(QWidget):
             "background:#21262d;border-radius:8px;"
         )
         lbl.setObjectName("thinking_indicator")
-        self._msg_layout.insertWidget(
-            self._msg_layout.count() - 1, lbl,
-            alignment=Qt.AlignmentFlag.AlignLeft
-        )
+        self._msg_layout.addWidget(lbl, alignment=Qt.AlignmentFlag.AlignLeft)
         self._scroll_to_bottom()
         return lbl
 
@@ -919,14 +924,31 @@ class ChatPage(QWidget):
                     break
 
     def _on_scroll_range_changed(self, _min: int, _max: int):
-        """内容高度变化（消息变长、图片加载）后若仍在底部，就继续贴底"""
+        """内容高度变化（换行、图片加载、流式变长）后持续贴底"""
         if self._auto_scroll:
-            self._scroll.verticalScrollBar().setValue(_max)
+            self._scroll_to_bottom()
 
     def _on_scroll_value_changed(self, value: int):
-        """用户手动上翻时停止自动贴底，回到底部附近后恢复"""
+        """只有滚到底部附近才恢复自动贴底；上翻绝不在这里取消"""
         sb = self._scroll.verticalScrollBar()
-        self._auto_scroll = value >= sb.maximum() - 24
+        if sb.maximum() > 0 and value >= sb.maximum() - 4:
+            self._auto_scroll = True
+
+    def _on_scroll_action(self, action: int):
+        """用户拖动滑块 / 点箭头 / 翻页向上时，停止自动贴底"""
+        act = QAbstractSlider.SliderAction
+        if action in (act.SliderMove, act.SliderSingleStepSub,
+                      act.SliderPageStepSub):
+            self._auto_scroll = False
+
+    def _stick_tick(self):
+        """贴底计时器：Qt 的换行高度要等排版完成，连续补约 1.4 秒"""
+        if not self._auto_scroll or self._stick_ticks <= 0:
+            self._stick_timer.stop()
+            return
+        self._stick_ticks -= 1
+        sb = self._scroll.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def _scroll_to_bottom(self, force: bool = False):
         """滚到最底；force=True 表示自己的新消息必须贴底"""
@@ -934,8 +956,10 @@ class ChatPage(QWidget):
             self._auto_scroll = True
         if not self._auto_scroll:
             return
-        sb = self._scroll.verticalScrollBar()
-        QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))
+        self._stick_ticks = 24          # 24 × 60ms ≈ 1.4 秒
+        self._stick_tick()
+        if not self._stick_timer.isActive():
+            self._stick_timer.start()
 
 
 # ── 记忆库页 ──────────────────────────────────────
@@ -2052,11 +2076,16 @@ class SettingsPage(QWidget):
         sample_row.addWidget(btn_sample)
         mimo_lay.addLayout(sample_row, 4, 1)
 
-        mimo_note = QLabel("唱歌：选「预置音色」，回复文本以 (唱歌) 开头；"
+        self._tts_mimo_sing = QCheckBox("唱歌模式：合成文本开头自动加 (唱歌)")
+        self._tts_mimo_sing.setChecked(bool(self._cfg.get("tts_mimo_sing", False)))
+        mimo_lay.addWidget(self._tts_mimo_sing, 5, 1)
+
+        mimo_note = QLabel("唱歌只认 assistant 文本开头的 (唱歌) 标签，"
+                           "在 MiMo 上语音说话不会自动变成唱歌；"
                            "克隆：选「音色复刻」并指定样本文件。")
         mimo_note.setStyleSheet("color:#8b949e;font-size:11px;")
         mimo_note.setWordWrap(True)
-        mimo_lay.addWidget(mimo_note, 5, 1)
+        mimo_lay.addWidget(mimo_note, 6, 1)
 
         tts_lay.addWidget(self._tts_mimo_widget, 3, 0, 1, 2)
         self._on_tts_provider_changed(self._tts_provider.currentIndex())
@@ -2764,6 +2793,7 @@ class SettingsPage(QWidget):
         self._cfg["tts_mimo_model"]    = self._tts_mimo_model.currentData() or "mimo-v2.5-tts"
         self._cfg["tts_mimo_voice"]    = self._tts_mimo_voice.currentData() or "冰糖"
         self._cfg["tts_mimo_style"]    = self._tts_mimo_style.text().strip()
+        self._cfg["tts_mimo_sing"]     = self._tts_mimo_sing.isChecked()
         self._cfg["tts_mimo_api_key"]  = self._tts_mimo_key.text().strip()
         self._cfg["tts_mimo_sample"]   = self._tts_mimo_sample.text().strip()
         # STT 语音识别

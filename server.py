@@ -1427,6 +1427,10 @@ textarea.input{resize:vertical;min-height:60px;font-family:'Sora',sans-serif}
           <div class="field"><label>模型</label><select id="cfg-tts-mimo-model" class="input"></select></div>
           <div class="field"><label>预置音色</label><select id="cfg-tts-mimo-voice" class="input"></select></div>
           <div class="field"><label>风格指令（(唱歌) 可唱歌 / 设计音色的描述）</label><input id="cfg-tts-mimo-style" class="input" type="text"></div>
+          <div class="toggle">
+            <span class="toggle-label">唱歌模式（合成文本开头自动加 (唱歌)）</span>
+            <label class="switch"><input type="checkbox" id="cfg-tts-mimo-sing"><span class="slider"></span></label>
+          </div>
           <div class="field"><label>API Key（留空继承视觉/主 Key）</label><input id="cfg-tts-mimo-key" class="input" type="password"></div>
           <div class="field"><label>克隆样本路径（音色复刻用，mp3/wav）</label><input id="cfg-tts-mimo-sample" class="input" type="text"></div>
         </div>
@@ -2278,6 +2282,7 @@ async function loadSettings(){
     (PROVIDERS.tts_mimo_voices||[]).forEach(function(v){var o=document.createElement('option');o.value=v.id;o.textContent=v.name;mvsel.appendChild(o);});
     mvsel.value=cfg.tts_mimo_voice||'冰糖';
     document.getElementById('cfg-tts-mimo-style').value=cfg.tts_mimo_style||'';
+    document.getElementById('cfg-tts-mimo-sing').checked=cfg.tts_mimo_sing===true;
     document.getElementById('cfg-tts-mimo-key').value=cfg.tts_mimo_api_key||'';
     document.getElementById('cfg-tts-mimo-sample').value=cfg.tts_mimo_sample||'';
     var tr=document.getElementById('cfg-tts-rate');tr.value=cfg.tts_rate||0;
@@ -2353,6 +2358,7 @@ async function saveSettings(){
   cfg.tts_mimo_model=document.getElementById('cfg-tts-mimo-model').value;
   cfg.tts_mimo_voice=document.getElementById('cfg-tts-mimo-voice').value;
   cfg.tts_mimo_style=document.getElementById('cfg-tts-mimo-style').value.trim();
+  cfg.tts_mimo_sing=document.getElementById('cfg-tts-mimo-sing').checked;
   cfg.tts_mimo_api_key=document.getElementById('cfg-tts-mimo-key').value.trim();
   cfg.tts_mimo_sample=document.getElementById('cfg-tts-mimo-sample').value.trim();
   cfg.stt_provider=document.getElementById('cfg-stt-provider').value;
