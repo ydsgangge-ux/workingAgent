@@ -154,6 +154,8 @@ RESPONSE_PROMPT = """你是{name}，请根据以下内容生成自然的回应�
 
 {memory_context}
 
+{news_section}
+
 {history_section}
 
 当前时间：{current_time}（此刻真实时间，据此描述当下场景；视觉记忆、最近记忆、对话历史里的时间都是过去，不能当作现在，也不能据此推断今天是周几或现在几点）
@@ -173,6 +175,12 @@ QQ_FACE_HINT = """【当前聊天渠道】QQ
 你可以发送 QQ 默认小黄脸，写法：[表情:名称] 或 [face:数字]，例如 [表情:微笑]、[表情:呲牙]、[表情:抠鼻]。
 常用表情ID：微笑14 呲牙13 调皮12 得意4 流泪5 害羞6 酷16 可爱21 偷笑20 疑问32 委屈49 亲亲52 强79 抱拳83 爱心66。
 规则：只在情绪合适时用，每句最多 2-3 个，不要每句都加；不要解释这些标记，直接输出。"""
+
+# QQ 语音能力提示：告诉模型它可以自己选择用语音回复（A 层决定，不是一个工具）
+QQ_VOICE_HINT = """【语音能力】你可以选择用语音回复：在回复最后单独加标记 [[voice]]，系统会把这段文字转成语音发给对方，标记本身不会显示。
+什么时候选语音：情绪很浓、想让人听到语气、用户明确要你说话或唱歌、用户发来语音时。
+选语音时：不写（动作描写）、不用 Markdown、不用 [表情:x]，全文不超过 240 字，写成能直接念出来的话。
+不选语音就别加这个标记。不要说自己发不了语音——你确实可以发。"""
 
 # QQ 回复长度提示：由设置里的 qq_reply_length 决定
 QQ_LENGTH_HINTS = {
@@ -619,7 +627,15 @@ class ConsciousnessAgent:
             except Exception:
                 _style = str(self._get_config("qq_reply_length", "normal") or "normal")
             _len_hint = QQ_LENGTH_HINTS.get(_style, QQ_LENGTH_HINTS["normal"])
-            profile_context = (QQ_FACE_HINT + "\n" + _len_hint + "\n\n" + profile_context).strip()
+            # 语音开关打开时才告知能力，避免其他渠道或关闭时误导模型
+            _voice_hint = ""
+            try:
+                from desktop.config import load_config as _lc
+                if bool((_lc() or {}).get("qq_voice_enable")):
+                    _voice_hint = QQ_VOICE_HINT + "\n"
+            except Exception:
+                pass
+            profile_context = (QQ_FACE_HINT + "\n" + _len_hint + "\n" + _voice_hint + "\n" + profile_context).strip()
 
         # 统计检索到的记忆数量
         total = 0
@@ -938,6 +954,7 @@ class ConsciousnessAgent:
                 pass
 
         # ⑤ 生成回应（带完整对话历史）；空回应自动重新生成，最多重试 _RESPONSE_RETRY_MAX 次
+        news_section = self._build_news_context()
         response = ""
         for _attempt in range(_RESPONSE_RETRY_MAX + 1):
             try:
@@ -950,6 +967,7 @@ class ConsciousnessAgent:
                     profile_context=profile_context,
                     current_user_name=current_user_name,
                     current_user_id=current_uid,
+                    news_section=news_section,
                 )
             except Exception as e:
                 self._log("回应", f"生成失败: {e}")
@@ -961,6 +979,13 @@ class ConsciousnessAgent:
         if not response or not response.strip():
             # 重试完毕后仍为空，给一句自然兜底，不裸发空消息
             response = f"（张了张嘴，没想出该说什么）"
+        # 语音输出状态：A 层在回复末尾标记 [[voice]] 表示这条想用语音发出
+        voice_reply = False
+        if channel == "qq" and response:
+            if re.search(r"\[\[voice\]\]|【语音】|\[语音\]", response):
+                voice_reply = True
+                response = re.sub(r"\[\[voice\]\]|【语音】|\[语音\]", "", response).strip()
+                self._log("语音", "A层选择用语音输出")
         self._log("回应", response[:200] + ("..." if len(response) > 200 else ""))
 
         # ⑥ 存储决策（即使回应生成失败也要保存记忆）
@@ -1084,6 +1109,7 @@ class ConsciousnessAgent:
             "tools_used":       tools_used,
             "storage_decision": storage_decision,
             "stored_ids":       stored_ids,
+            "voice":            voice_reply,
             "response":         response,
             "timestamp":        datetime.now().isoformat()
         }
@@ -1450,6 +1476,23 @@ class ConsciousnessAgent:
             print("[A层·推理JSON解析失败] raw_片段:", raw[:300].replace("\n", " "))
         return parsed
 
+    def _build_news_context(self) -> str:
+        """当天主动学习得到的记忆，作为独立的“今日见闻”上下文块"""
+        try:
+            since = datetime.now().strftime("%Y-%m-%dT00:00:00")
+            nodes = self.memory.store.list_recent_by_source("learner", since, limit=3)
+            if not nodes:
+                return ""
+            lines = ["【今日见闻】（我读到的新闻，不是亲身经历；只在话题自然相关时提及，不要主动播报，也不要说成自己经历的事）"]
+            for n in nodes:
+                text = re.sub(r"\s+", " ", n.content).strip()
+                text = re.sub(r"^今天我了解到[：:，,]\s*", "", text)
+                if text:
+                    lines.append(f"- {text[:70]}")
+            return "\n".join(lines) + "\n" if len(lines) > 1 else ""
+        except Exception:
+            return ""
+
     def _generate_response(
         self, user_input, memory_context,
         inner_reasoning, response_intent,
@@ -1457,6 +1500,7 @@ class ConsciousnessAgent:
         profile_context: str = "",
         current_user_name: str = "用户",
         current_user_id: str = "",
+        news_section: str = "",
     ) -> str:
         # 使用完整对话历史（最多 HISTORY_SEND_LIMIT 条，按用户隔离）
         _gen_uid = current_user_id or "default"
@@ -1480,6 +1524,7 @@ class ConsciousnessAgent:
             personality=self.personality.to_prompt_description(),
             profile_context=profile_context or "（上下文加载中）",
             memory_context=memory_context,
+            news_section=news_section,
             history_section=history_section,
             user_input=user_input,
             inner_reasoning=inner_reasoning,

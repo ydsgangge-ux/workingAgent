@@ -345,6 +345,17 @@ class MemoryStore:
             emotion_filter, user_id
         )
 
+    def list_recent_by_source(self, source: str, since_iso: str,
+                              limit: int = 3) -> List[MemoryNode]:
+        """按来源 + 起始时间倒序取记忆（用于“今日见闻”这类固定上下文）"""
+        with guarded_connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM memories WHERE source=? AND created_at>=? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (source, since_iso, int(limit))
+            ).fetchall()
+        return [n for n in (self._row_to_node(r) for r in rows) if n]
+
     def _search_vectorized(
         self,
         query_vec: List[float],

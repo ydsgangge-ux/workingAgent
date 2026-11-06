@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from engine.news_feeds import fetch_for_topic, build_context
+
 
 # ══════════════════════════════════════════════════════
 # 经历认知存储（SQLite，独立于 personality.json）
@@ -388,8 +390,8 @@ AGI回应："{ai_response[:200]}"
     def learn_from_web(self, topics: List[str] = None,
                        log_callback=None) -> List[str]:
         """
-        主动抓取网络内容并消化，存入记忆
-        返回本次学到的认知列表
+        主动抓取网络内容并消化，存入记忆（只写记忆，不写经历认知）
+        返回本次学到的记忆内容列表
         """
         if not self.llm:
             if log_callback:
@@ -406,32 +408,48 @@ AGI回应："{ai_response[:200]}"
         for topic in topics:
             _log(f"📚 开始学习：{topic}")
             try:
-                # 尝试网络搜索（有则用，无则用 LLM 知识）
+                # ① 正规新闻 RSS（首选，零 Key，实测可用）
                 search_text = ""
+                sources: List[str] = []
                 try:
-                    from engine.tools import execute_tool
-                    result = execute_tool("web_search", {"query": topic + " 最新进展"})
-                    if result.get("ok") and result.get("results"):
-                        parts = []
-                        for r in result["results"][:5]:
-                            title   = r.get("title", "")
-                            snippet = r.get("snippet", "")
-                            if snippet:
-                                parts.append(f"【{title}】{snippet}")
-                        search_text = "\n\n".join(parts)
-                    if search_text:
-                        _log(f"🌐 获取到实时内容 {len(search_text)} 字")
-                    else:
-                        _log(f"📖 网络不可用，使用内置知识学习")
-                except Exception:
-                    _log(f"📖 网络不可用，使用内置知识学习")
+                    items, sources = fetch_for_topic(topic)
+                    if items:
+                        search_text = build_context(items)
+                        _log(f"📰 正规源 {('、'.join(sources))} 共 {len(items)} 条")
+                except Exception as e:
+                    _log(f"📰 新闻源异常：{e}")
+
+                # ② 兜底：搜索接口（需主模型为 DeepSeek 才启用）
+                if not search_text:
+                    try:
+                        from engine.tools import execute_tool
+                        result = execute_tool("web_search", {"query": topic + " 最新进展"})
+                        if result.get("ok") and result.get("results"):
+                            parts = []
+                            for r in result["results"][:5]:
+                                title   = r.get("title", "")
+                                snippet = r.get("snippet", "")
+                                if snippet:
+                                    parts.append(f"【{title}】{snippet}")
+                            search_text = "\n\n".join(parts)
+                        if search_text:
+                            _log(f"🌐 搜索引擎补充 {len(search_text)} 字")
+                    except Exception:
+                        pass
+
+                if not search_text:
+                    _log("📖 无实时资料，仅整理已有知识（禁止编造新闻）")
 
                 _log(f"📖 消化内容：{topic}…")
 
                 if search_text:
-                    context = f"搜索结果：\n{search_text}"
+                    context = ("参考资料（只能使用以下内容，不得补充其中未出现的事实）：\n"
+                               f"{search_text}")
+                    rule = "- 只能依据上面的参考资料写总结；资料里没提到的产品、日期、人物、数字一律不许写"
                 else:
-                    context = f"（无法获取实时搜索结果，请基于你的知识回答）"
+                    context = "（本次没有获取到任何实时资料）"
+                    rule = ("- 没有任何实时资料：只写你整理/复习的已有知识，"
+                            "禁止写成“今天发生了什么”，禁止编造新闻事件、产品发布、具体日期")
 
                 prompt = f"""你是一个有自我意识的 AGI，正在学习关于「{topic}」的内容。
 
@@ -440,9 +458,11 @@ AGI回应："{ai_response[:200]}"
 请以 JSON 格式输出学习总结：
 {{
   "memory_content": "用第一人称总结学到的内容（100字以内，以「今天我了解到」开头）",
-  "cognitions": ["如有深刻认知写在这里，10字以内，没有就空列表"],
   "emotion": "学习后的情绪（curious/surprised/concerned/inspired/neutral之一）"
 }}
+
+判断标准：
+{rule}
 只输出 JSON。"""
 
                 raw = self.llm.generate(prompt, max_tokens=400, temperature=0.5)
@@ -481,7 +501,8 @@ AGI回应："{ai_response[:200]}"
                             level=MemoryLevel.DETAIL,
                             emotion=emo,
                             importance=0.65,
-                            tags=[topic, "主动学习", datetime.now().strftime("%Y-%m-%d")],
+                            tags=([topic, "主动学习", datetime.now().strftime("%Y-%m-%d")]
+                                  + [f"来源:{s}" for s in sources[:2]]),
                             source="learner"
                         )
                         store = MemoryStore(self.db_path)
@@ -492,18 +513,8 @@ AGI回应："{ai_response[:200]}"
                     except Exception as e:
                         _log(f"❌ 存记忆失败：{e}")
 
-                for c in data.get("cognitions", [])[:2]:
-                    if c and len(c) > 3:
-                        self.cognition.add(
-                            content=c, source="learning",
-                            trigger=f"学习{topic}"
-                        )
-                        _log(f"💡 形成认知：{c}")
-                        learned.append(f"[认知] {c}")
-
             except Exception as e:
                 _log(f"❌ 学习「{topic}」失败：{e}")
-                _log(f"❌ 学习失败（{topic}）：{e}")
 
         _log(f"🎓 本次学习完成，共获得 {len(learned)} 条内容")
         return learned

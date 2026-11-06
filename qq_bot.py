@@ -786,8 +786,10 @@ class QQBot:
     # ── 回复与交付 ─────────────────────────────────────
     VOICE_TRIGGERS = ("发语音", "语音吧", "说给我听", "念给我听", "用语音",
                       "语音回复", "语音说", "发段语音", "唱歌", "唱首歌",
-                      "唱一个", "唱吧")
-    VOICE_MAX_CHARS = 240        # 约 60 秒，超过就改发文字
+                      "唱一个", "唱吧", "语音读", "语音念", "念原文",
+                      "读原文", "念给我", "读给我")
+    VOICE_MAX_CHARS = 240        # 单条语音上限（约 60 秒）
+    VOICE_MAX_SEGMENTS = 3       # 长文本最多拆 3 条语音，剩余转文字
 
     def _should_voice(self, kind: str, user_id: str,
                       user_text: str, result: dict,
@@ -797,10 +799,13 @@ class QQBot:
             return False
         if kind == "group" and not self._voice_group:
             return False
-        # 1) 用户发来语音，或明确要求（不受冷却限制，但 60 秒内仍限一次）
+        # 1) A 层在回复里主动选择了语音（输出状态，不是工具调用）
+        if result.get("voice"):
+            return time.time() - self._last_voice.get(user_id, 0) >= 60
+        # 2) 用户发来语音，或明确要求（不受冷却限制，但 60 秒内仍限一次）
         if voice_in or any(t in (user_text or "") for t in self.VOICE_TRIGGERS):
             return time.time() - self._last_voice.get(user_id, 0) >= 60
-        # 2) 情绪强度达到阈值，且过了冷却
+        # 3) 情绪强度达到阈值，且过了冷却
         try:
             intensity = float((result.get("emotion") or {}).get("intensity", 0) or 0)
         except Exception:
@@ -814,13 +819,45 @@ class QQBot:
         """去掉产物标记、QQ 表情、emoji，只留可朗读的文字"""
         plain = re.sub(r"\[(?:image|video|download|file):[^\]]*\]", "", text or "")
         plain = FACE_TOKEN_RE.sub("", plain)
+        # 括注是“打字/动作”描写，如（笑，打字很慢），念出来很怪
+        plain = re.sub(r"（[^）]{0,30}）", "", plain)
+        plain = re.sub(r"\[\[voice\]\]|【语音】|\[语音\]", "", plain)
         plain = re.sub(r"[\U0001F000-\U0001FAFF\u2190-\u2BFF]", "", plain)
         plain = re.sub(r"[*#`>|]", "", plain)
-        return re.sub(r"\n+", "。", plain).strip()
+        plain = re.sub(r"\n+", "。", plain)
+        return re.sub(r"。{2,}", "。", plain).strip()
+
+    @staticmethod
+    def _voice_chunks(text: str):
+        """按句切成不超过 VOICE_MAX_CHARS 的段，最多 VOICE_MAX_SEGMENTS 段；返回 (段列表, 剩余文字)"""
+        limit = QQBot.VOICE_MAX_CHARS
+        max_seg = QQBot.VOICE_MAX_SEGMENTS
+        if len(text) <= limit:
+            return [text], ""
+
+        parts, buf = [], ""
+        for piece in re.split(r"(?<=[。！？!?；;…])", text):
+            if not piece:
+                continue
+            if len(buf) + len(piece) <= limit:
+                buf += piece
+                continue
+            if buf:
+                parts.append(buf.strip())
+                buf = ""
+            while len(piece) > limit:
+                parts.append(piece[:limit])
+                piece = piece[limit:]
+            buf = piece
+        if buf.strip():
+            parts.append(buf.strip())
+
+        parts = [p for p in parts if p]
+        return parts[:max_seg], "".join(parts[max_seg:])
 
     def _send_voice(self, kind: str, target: str, user_id: str,
                     text: str, at_user: str = "", sing: bool = False) -> bool:
-        """合成语音并以 record 段发送；失败降级为音频文件"""
+        """合成语音并以 record 段发送；过长时拆成多条语音，失败降级为文件/文字"""
         plain = self._voice_plain_text(text)
         if sing:
             # 唱歌时去掉“来，唱给你听：”这类开场白，只唱后面的歌词
@@ -830,6 +867,34 @@ class QQBot:
                     if len(tail) >= 8:
                         plain = tail
                     break
+        if len(plain) < 2:
+            print("[QQBot] 语音跳过：可朗读文本过短")
+            return False
+
+        chunks, leftover = self._voice_chunks(plain)
+        if leftover:
+            print(f"[QQBot] 文本较长：前 {len(chunks)} 段发语音，剩余 {len(leftover)} 字转文字")
+
+        sent = 0
+        for i, chunk in enumerate(chunks):
+            ok = self._send_voice_once(
+                kind, target, user_id, chunk,
+                at_user if i == 0 else "", sing
+            )
+            if not ok:
+                break
+            sent += 1
+
+        if not sent:
+            print(f"[QQBot] 语音发送失败，回落文字（{len(plain)} 字）")
+            return False
+        if leftover:
+            self._reply(kind, target, leftover, at_user=at_user)
+        return True
+
+    def _send_voice_once(self, kind: str, target: str, user_id: str,
+                         plain: str, at_user: str = "", sing: bool = False) -> bool:
+        """合成一段语音并发送；record 段失败时退回音频文件"""
         if len(plain) < 2 or len(plain) > self.VOICE_MAX_CHARS:
             return False
         try:
@@ -839,6 +904,7 @@ class QQBot:
             print(f"[QQBot] 语音合成失败: {e}")
             return False
         if not path or not Path(path).exists():
+            print(f"[QQBot] 语音合成无产物（{len(plain)} 字）")
             return False
 
         try:
