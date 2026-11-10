@@ -4126,3 +4126,36 @@ def list_timed_tasks(status: str = "pending") -> Dict:
         return {"ok": True, "tasks": tasks, "summary": "\n".join(summaries)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@register_tool(
+    name="device_scan",
+    description=(
+        "扫描当前环境里可接入的硬件设备（只读，不会控制或改动任何设备）。"
+        "范围包括：本机串口/摄像头/音频/USB/蓝牙、局域网在线主机及开放端口、"
+        "UPnP/DLNA 设备、HomeAssistant 已接入的智能家居实体。"
+        "当用户问'家里有什么设备''现在能控制什么''有没有接摄像头'时使用。"
+        "注意：发现不等于可控，私有协议设备需要额外适配。"
+    ),
+    parameters={
+        "scope": {"type": "string",
+                  "description": "扫描范围：local（仅本机）/ lan（本机+局域网+UPnP）/ all（再加HomeAssistant），默认 all"},
+        "port_scan": {"type": "boolean",
+                      "description": "是否探测局域网主机开放端口，默认 true（关掉更快但信息少）"},
+    },
+    risk="low"
+)
+def device_scan(scope: str = "all", port_scan: bool = True) -> Dict:
+    """设备发现：本机外设 + 局域网主机 + UPnP + HA 实体（纯只读）"""
+    try:
+        from engine.device_scanner import scan_all
+        result = scan_all(scope=scope, port_scan=port_scan)
+
+        # 控制返回体积，避免把上下文塞满
+        devices = result.get("devices", [])
+        if len(devices) > 60:
+            result["devices"] = devices[:60]
+            result["truncated"] = f"共 {len(devices)} 个，仅返回前 60 个"
+        return result
+    except Exception as e:
+        return {"ok": False, "error": f"设备扫描异常: {e}"}
