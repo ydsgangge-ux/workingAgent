@@ -640,6 +640,20 @@ class ChatPage(QWidget):
         )
 
         in_layout.addWidget(self.btn_simlife)
+
+        # 桌面宠物开关（独立浮窗，素材驱动）
+        self.btn_pet = QPushButton("🐾")
+        self.btn_pet.setFixedSize(44, 72)
+        self.btn_pet.setToolTip("桌面宠物：显示 / 隐藏\n右键：切换表情")
+        self._pet_on = False
+        self._style_pet_btn()
+        self.btn_pet.clicked.connect(self._toggle_pet)
+        self.btn_pet.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.btn_pet.customContextMenuRequested.connect(self._pet_context_menu)
+        in_layout.addWidget(self.btn_pet)
+
         in_layout.addWidget(btn_send)
 
         layout.addWidget(self._scroll)
@@ -682,6 +696,130 @@ class ChatPage(QWidget):
 
         outer.addWidget(left, stretch=1)
         outer.addWidget(right_col)
+
+        # 桌面宠物：配置里开着就延后创建，避免拖慢启动
+        self.pet_widget = None
+        try:
+            from desktop.config import load_config as _lc
+            if _lc().get("pet_enabled", False):
+                QTimer.singleShot(600, self._init_pet)
+        except Exception:
+            pass
+
+    # ── 桌面宠物 ──────────────────────────────────
+    def _style_pet_btn(self):
+        if self._pet_on:
+            self.btn_pet.setStyleSheet(
+                "QPushButton{background:#1f6feb;border:none;"
+                "border-radius:8px;color:white;font-size:18px;}"
+            )
+        else:
+            self.btn_pet.setStyleSheet(
+                "QPushButton{background:#21262d;border:1px solid #30363d;"
+                "border-radius:8px;color:#8b949e;font-size:18px;}"
+                "QPushButton:hover{color:#58a6ff;border-color:#58a6ff;}"
+            )
+
+    def _init_pet(self):
+        """创建桌宠浮窗（失败不影响主程序）"""
+        if self.pet_widget is not None:
+            return self.pet_widget
+        try:
+            from vrm_module import media_pet_class
+            if not media_pet_class:
+                print("[Pet] 素材桌宠不可用", flush=True)
+                return None
+            self.pet_widget = media_pet_class()
+            self.pet_widget.closed.connect(self._on_pet_closed)
+            self.pet_widget.show()
+            self._pet_on = True
+            self._style_pet_btn()
+            return self.pet_widget
+        except Exception as e:
+            print(f"[Pet] 创建桌宠失败: {e}", flush=True)
+            self.pet_widget = None
+            return None
+
+    def _on_pet_closed(self):
+        """桌宠浮窗被右键菜单关掉时，同步按钮状态与配置"""
+        self.pet_widget = None
+        self._pet_on = False
+        self._style_pet_btn()
+        try:
+            from desktop.config import load_config, save_config
+            cfg = load_config()
+            cfg["pet_enabled"] = False
+            save_config(cfg)
+        except Exception:
+            pass
+
+    def _toggle_pet(self):
+        if self._pet_on:
+            w = self.pet_widget
+            self.pet_widget = None
+            self._pet_on = False
+            if w is not None:
+                try:
+                    w.close()
+                    w.deleteLater()
+                except Exception:
+                    pass
+        else:
+            if self._init_pet() is None:
+                return
+        self._style_pet_btn()
+        try:
+            from desktop.config import load_config, save_config
+            cfg = load_config()
+            cfg["pet_enabled"] = self._pet_on
+            save_config(cfg)
+        except Exception:
+            pass
+
+    def _pet_context_menu(self, pos):
+        """桌宠按钮右键：快速切表情"""
+        from PyQt6.QtWidgets import QMenu
+        labels = [("idle", "待机"), ("happy", "开心"), ("thinking", "思考"),
+                  ("sad", "低落"), ("surprised", "惊讶"), ("sleepy", "困了")]
+        menu = QMenu(self.btn_pet)
+        menu.setStyleSheet(
+            "QMenu{background:#21262d;border:1px solid #30363d;"
+            "color:#e6edf3;padding:4px;}"
+            "QMenu::item{padding:6px 16px;}"
+            "QMenu::item:hover{background:#30363d;}"
+        )
+        if not self._pet_on:
+            menu.addAction("先点击按钮显示桌宠").setEnabled(False)
+        for act, label in labels:
+            a = menu.addAction(label)
+            a.setEnabled(self._pet_on)
+            a.triggered.connect(
+                lambda _=False, x=act: self._pet_play(x)
+            )
+        menu.addSeparator()
+        menu.addAction("📂 打开素材目录", self._pet_open_assets)
+        menu.exec(self.btn_pet.mapToGlobal(pos))
+
+    def _pet_play(self, action: str):
+        w = self.pet_widget
+        if w is None:
+            return
+        try:
+            from vrm_module.media_pet import LOOP_ACTIONS
+            w.play(action, loop=action in LOOP_ACTIONS)
+        except Exception as e:
+            print(f"[Pet] 切换动作失败: {e}", flush=True)
+
+    def _pet_open_assets(self):
+        w = self.pet_widget
+        try:
+            if w is not None:
+                w.assets.open_folder()
+            else:
+                from vrm_module.media_pet import PetAssets
+                PetAssets().open_folder()
+        except Exception as e:
+            print(f"[Pet] 打开素材目录失败: {e}", flush=True)
 
     def _on_text_changed(self):
         """检测 / 开头，弹出补全"""
@@ -5782,6 +5920,8 @@ class MainWindow(QMainWindow):
 
     # 人脸识别完成后通知 UI 的信号（在主线程执行）
     _auth_done = pyqtSignal()
+    # TTS 播报结束（回调在播放线程，用信号切回主线程让桌宠复位）
+    _pet_speak_done = pyqtSignal()
 
     def __init__(self, agent, db_file: str):
         super().__init__()
@@ -5793,6 +5933,7 @@ class MainWindow(QMainWindow):
 
         # 连接人脸识别完成信号 → 主线程更新 UI
         self._auth_done.connect(self._on_face_recognized)
+        self._pet_speak_done.connect(self._on_pet_speak_done)
 
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(900, 640)
@@ -6755,6 +6896,14 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        # 桌宠: 思考中
+        pet = getattr(self.chat_page, "pet_widget", None)
+        if pet:
+            try:
+                pet.play("thinking", loop=True)
+            except Exception:
+                pass
+
         self._worker = AGIWorker(self.agent, text)
         self._worker.finished.connect(self._on_result)
         self._worker.error.connect(self._on_error)
@@ -6871,12 +7020,31 @@ class MainWindow(QMainWindow):
                     vrm.set_speaking(False)
                 except Exception:
                     pass
+            # 桌宠: 情绪 → 动作
+            pet = getattr(self.chat_page, "pet_widget", None)
+            if pet:
+                try:
+                    pet.set_emotion(
+                        e.get("primary", "neutral"),
+                        e.get("intensity", 0),
+                        e.get("secondary"),
+                        e.get("valence", 0.0),
+                    )
+                except Exception:
+                    pass
         else:
             # VRM: 无情绪时回到 idle
             vrm = getattr(self.chat_page, "vrm_widget", None)
             if vrm:
                 try:
                     vrm.set_speaking(False)
+                except Exception:
+                    pass
+            # 桌宠: 无情绪时回 idle
+            pet = getattr(self.chat_page, "pet_widget", None)
+            if pet:
+                try:
+                    pet.play("idle", loop=True)
                 except Exception:
                     pass
         self._status_mode.setText("就绪")
@@ -6891,9 +7059,26 @@ class MainWindow(QMainWindow):
                 tts = get_tts()
                 tts.set_voice(cfg.get("tts_voice", "zh-CN-XiaoxiaoNeural"))
                 tts.set_rate(cfg.get("tts_rate", 0))
-                tts.speak(response_text)
+                # 桌宠: 朗读时切 speaking，结束后由信号切回
+                pet = getattr(self.chat_page, "pet_widget", None)
+                if pet:
+                    try:
+                        pet.start_lip_sync()
+                    except Exception:
+                        pass
+                _on_done = self._pet_speak_done.emit if pet else None
+                tts.speak(response_text, on_done=_on_done)
         except Exception as e:
             print(f"[TTS] 自动朗读异常: {e}")
+
+    def _on_pet_speak_done(self):
+        """TTS 播报结束 → 桌宠回 idle（主线程）"""
+        pet = getattr(self.chat_page, "pet_widget", None)
+        if pet:
+            try:
+                pet.stop_lip_sync()
+            except Exception:
+                pass
 
     def _on_error(self, err: str):
         self.chat_page.remove_thinking_indicator()
@@ -6906,6 +7091,13 @@ class MainWindow(QMainWindow):
             try:
                 vrm.set_speaking(False)
                 vrm.set_emotion("neutral", 0.5)
+            except Exception:
+                pass
+        # 桌宠: 错误时回 idle
+        pet = getattr(self.chat_page, "pet_widget", None)
+        if pet:
+            try:
+                pet.play("idle", loop=True)
             except Exception:
                 pass
 
@@ -7016,4 +7208,12 @@ class MainWindow(QMainWindow):
             event.ignore()
             self.hide()
         else:
+            # 真正退出时一并关掉独立浮窗桌宠
+            pet = getattr(self.chat_page, "pet_widget", None)
+            if pet is not None:
+                try:
+                    pet.close()
+                except Exception:
+                    pass
+                self.chat_page.pet_widget = None
             event.accept()

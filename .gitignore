@@ -96,3 +96,6 @@ _login_data.json
 _login_data2.json
 _test_output.txt
 _tmp_out.txt
+
+# 桌宠素材试做/预览产物（正式素材在 vrm_module/static/pet_assets）
+pet_demo/

@@ -48,6 +48,11 @@ DEFAULT_CONFIG = {
     "vrm_enabled":       True,   # 是否启用 VRM 虚拟形象面板
     "vrm_width":         220,    # VRM 面板宽度 (px)
     "vrm_height":        220,    # VRM 面板高度 (px)
+    # ── 桌面宠物（素材驱动，独立浮窗）──
+    "pet_enabled":       True,   # 是否显示桌面宠物（启动即加载，可在输入框 🐾 按钮关闭）
+    "pet_size":          220,    # 窗口边长 (px)：120/160/220/300
+    "pet_pos_x":         None,   # 上次位置，None 表示默认右下角
+    "pet_pos_y":         None,
     # ── 语音识别（STT）──
     "stt_provider":      "mimo",      # "mimo" | "xunfei" | "whisper_local" | "faster_whisper"
     "stt_language":      "zh",        # 识别语言
